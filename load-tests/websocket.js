@@ -11,6 +11,7 @@ import ws from "k6/ws";
 import { check, sleep } from "k6";
 import http from "k6/http";
 import { Trend, Counter, Rate } from "k6/metrics";
+import encoding from "k6/encoding";
 import { BASE_URL, DEFAULT_OPTIONS, TEST_USER } from "./config.js";
 
 const connectDuration = new Trend("ws_connect_duration", true);
@@ -47,9 +48,10 @@ export function setup() {
     throw new Error(`Setup login failed: ${loginRes.status}`);
   }
 
-  const { accessToken, user } = JSON.parse(loginRes.body);
-  // Get companyId from the JWT (decode middle part)
-  const payload = JSON.parse(atob(accessToken.split(".")[1]));
+  const { accessToken } = JSON.parse(loginRes.body);
+  // Get companyId from the JWT (decode middle part using k6/encoding)
+  const rawPayload = accessToken.split(".")[1];
+  const payload = JSON.parse(encoding.b64decode(rawPayload, "rawurl", "s"));
   return { accessToken, companyId: payload.company_id };
 }
 

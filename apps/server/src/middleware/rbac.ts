@@ -26,7 +26,8 @@ export function requirePermission(permission: Permission) {
     const { roles, department_roles } = req.auth;
 
     // Check company-level roles first
-    for (const role of roles) {
+    // Guard against agent run tokens which carry no `roles` field
+    for (const role of (roles ?? [])) {
       const perms = ROLE_PERMISSIONS[role as UserRole];
       if (perms?.includes(permission)) {
         return next();
