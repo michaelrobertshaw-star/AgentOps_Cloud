@@ -1,0 +1,33 @@
+{
+  "name": "agentops-cloud",
+  "private": true,
+  "description": "AgentOps Cloud v2 — Multi-tenant AI Operations Platform",
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev": "pnpm -r --parallel dev",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "pnpm -r typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:generate": "pnpm --filter @agentops/db generate",
+    "db:migrate": "pnpm --filter @agentops/db migrate",
+    "db:studio": "pnpm --filter @agentops/db studio"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.18.0",
+    "eslint": "^9.18.0",
+    "prettier": "^3.4.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.20.0",
+    "vitest": "^3.0.0",
+    "supertest": "^7.0.0",
+    "@types/supertest": "^6.0.0"
+  }
+}
