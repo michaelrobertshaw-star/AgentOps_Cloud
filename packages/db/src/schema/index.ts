@@ -44,12 +44,15 @@ export const departmentRoleEnum = pgEnum("department_role", [
 export const agentStatusEnum = pgEnum("agent_status", [
   "draft",
   "testing",
+  "tested",
   "active",
   "degraded",
   "paused",
   "stopped",
   "error",
   "archived",
+  "deployed",
+  "disabled",
 ]);
 
 export const apiKeyStatusEnum = pgEnum("api_key_status", ["active", "revoked", "expired"]);
@@ -255,6 +258,8 @@ export const agents = pgTable(
     capabilities: jsonb("capabilities").default([]).notNull(),
     config: jsonb("config").default({}).notNull(),
     lastHeartbeatAt: timestamp("last_heartbeat_at", { withTimezone: true }),
+    deployedAt: timestamp("deployed_at", { withTimezone: true }),
+    deployedByUserId: uuid("deployed_by_user_id").references(() => users.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },

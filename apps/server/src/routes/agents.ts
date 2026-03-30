@@ -38,7 +38,7 @@ const updateAgentSchema = z.object({
   description: z.string().max(2000).nullable().optional(),
   departmentId: z.string().uuid().nullable().optional(),
   status: z
-    .enum(["draft", "testing", "active", "degraded", "paused", "stopped", "error", "archived"])
+    .enum(["draft", "testing", "tested", "active", "degraded", "paused", "stopped", "error", "archived", "deployed", "disabled"])
     .optional(),
   executionPolicy: z
     .object({
@@ -59,13 +59,16 @@ const updateAgentSchema = z.object({
 // Valid status transitions for agents
 const VALID_TRANSITIONS: Record<AgentStatus, AgentStatus[]> = {
   draft: ["testing", "archived"],
-  testing: ["active", "draft", "archived"],
+  testing: ["active", "tested", "draft", "archived"],
+  tested: ["deployed", "draft", "archived"],
   active: ["paused", "stopped", "degraded", "error", "archived"],
   degraded: ["active", "error", "stopped", "archived"],
   paused: ["active", "testing", "stopped", "archived"],
   stopped: ["draft", "archived"],
   error: ["stopped", "draft", "archived"],
   archived: [],
+  deployed: ["disabled", "tested", "archived"],
+  disabled: ["tested", "archived"],
 };
 
 function validateStatusTransition(current: AgentStatus, next: AgentStatus): void {

@@ -11,12 +11,15 @@ export type DepartmentRole = "department_manager" | "operator" | "viewer";
 export type AgentStatus =
   | "draft"
   | "testing"
+  | "tested"
   | "active"
   | "degraded"
   | "paused"
   | "stopped"
   | "error"
-  | "archived";
+  | "archived"
+  | "deployed"
+  | "disabled";
 
 export type ApiKeyStatus = "active" | "revoked" | "expired";
 

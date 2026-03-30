@@ -19,6 +19,7 @@ import { adminCompanyRoutes } from "./routes/adminCompanies.js";
 import { skillRoutes, agentSkillRoutes } from "./routes/skills.js";
 import { usageRoutes } from "./routes/usage.js";
 import { agentRunRoutes, agentRunDetailRoutes } from "./routes/agentRuns.js";
+import { agentDeployRoutes, companyDeployedAgentsRoute } from "./routes/deploy.js";
 import { requestId } from "./middleware/requestId.js";
 import { auditMiddleware } from "./middleware/audit.js";
 import { errorHandler } from "./middleware/errorHandler.js";
@@ -65,6 +66,9 @@ export function createApp() {
   app.use("/api/usage", usageRoutes());
   app.use("/api/agents/:agentId", agentRunRoutes());
   app.use("/api/agent-runs", agentRunDetailRoutes());
+
+  app.use("/api/agents/:agentId", agentDeployRoutes());
+  app.use("/api/companies/:companyId/deployed-agents", companyDeployedAgentsRoute());
 
   // Error handler (must be last)
   app.use(errorHandler());
