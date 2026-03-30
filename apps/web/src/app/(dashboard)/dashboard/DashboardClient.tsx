@@ -28,8 +28,21 @@ interface DashboardData {
   }>;
 }
 
+interface IncidentCounts {
+  open: number;
+  investigating: number;
+  resolved: number;
+  total: number;
+}
+
+interface IncidentPage {
+  data: Array<{ status: string }>;
+  total: number;
+}
+
 export function DashboardClient() {
   const [data, setData] = useState<DashboardData | null>(null);
+  const [incidents, setIncidents] = useState<IncidentCounts | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
@@ -41,6 +54,25 @@ export function DashboardClient() {
       setData(json);
       setLastUpdated(new Date());
       setError(null);
+
+      // Fetch incident counts across all active departments
+      const activeDepts = json.departments.filter((d) => d.status === "active");
+      const incidentResults = await Promise.all(
+        activeDepts.map(async (dept) => {
+          const r = await fetch(`/api/departments/${dept.id}/incidents?limit=500`);
+          if (!r.ok) return [];
+          const page: IncidentPage = await r.json();
+          return page.data;
+        }),
+      );
+      const allIncidents = incidentResults.flat();
+      const counts: IncidentCounts = { open: 0, investigating: 0, resolved: 0, total: allIncidents.length };
+      for (const inc of allIncidents) {
+        if (inc.status === "open") counts.open++;
+        else if (inc.status === "investigating") counts.investigating++;
+        else if (inc.status === "resolved") counts.resolved++;
+      }
+      setIncidents(counts);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load dashboard");
     }
@@ -81,9 +113,7 @@ export function DashboardClient() {
           <h1 className="text-2xl font-bold text-gray-900">{data.company.displayName}</h1>
           <p className="text-sm text-gray-500 mt-0.5">
             Company overview &nbsp;&middot;&nbsp;
-            {lastUpdated && (
-              <span>Last updated {lastUpdated.toLocaleTimeString()}</span>
-            )}
+            {lastUpdated && <span>Last updated {lastUpdated.toLocaleTimeString()}</span>}
           </p>
         </div>
         <button
@@ -118,6 +148,27 @@ export function DashboardClient() {
           <StatCard label="Completed" value={data.tasks.completed} color="green" />
           <StatCard label="Failed" value={data.tasks.failed} color="red" />
         </div>
+      </section>
+
+      {/* Incident counts */}
+      <section>
+        <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">
+          Incidents
+        </h2>
+        {incidents ? (
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <StatCard label="Total" value={incidents.total} color="gray" />
+            <StatCard label="Open" value={incidents.open} color="red" />
+            <StatCard label="Investigating" value={incidents.investigating} color="yellow" />
+            <StatCard label="Resolved" value={incidents.resolved} color="green" />
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="h-24 bg-gray-100 rounded-xl animate-pulse" />
+            ))}
+          </div>
+        )}
       </section>
 
       {/* Department table */}
