@@ -8,7 +8,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import request from "supertest";
 import { createApp } from "../app.js";
-import { issueAccessToken, issueAgentRunToken, verifyAgentRunToken } from "../services/authService.js";
+import { issueAccessToken } from "../services/authService.js";
 import { issueAgentRunToken as issueAgentToken, verifyAgentRunToken as verifyAgentToken } from "../services/agentAuthService.js";
 
 // ---------------------------------------------------------------------------

@@ -53,6 +53,11 @@ export function authRoutes() {
         userAgent: req.headers["user-agent"],
       });
 
+      // New users cannot have MFA enrolled yet, so login always succeeds without MFA challenge
+      if (loginResult.mfaRequired) {
+        throw new Error("Unexpected MFA challenge during registration auto-login");
+      }
+
       res.status(201).json({
         company: {
           id: company.id,

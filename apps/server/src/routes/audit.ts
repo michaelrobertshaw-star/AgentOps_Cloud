@@ -1,3 +1,4 @@
+import type { Request } from "express";
 import { Router } from "express";
 import { authenticate } from "../middleware/auth.js";
 import { requirePermission } from "../middleware/rbac.js";
@@ -116,7 +117,7 @@ export function auditCompanyRoutes() {
 export function auditArchiveCompanyRoutes() {
   const router = Router({ mergeParams: true });
 
-  function checkCompany(req: { params: { companyId: string }; companyId?: string }): void {
+  function checkCompany(req: Request): void {
     if (req.params.companyId !== req.companyId) {
       throw new ForbiddenError("Cannot access audit data for another company");
     }
