@@ -3,13 +3,15 @@ import { healthRoutes } from "./routes/health.js";
 import { authRoutes } from "./routes/auth.js";
 import { companyRoutes } from "./routes/companies.js";
 import { departmentRoutes } from "./routes/departments.js";
-import { auditRoutes } from "./routes/audit.js";
+import { auditRoutes, auditCompanyRoutes } from "./routes/audit.js";
 import { agentRoutes } from "./routes/agents.js";
 import { agentKeyRoutes } from "./routes/agentKeys.js";
 import { taskRoutes } from "./routes/tasks.js";
 import { agentCheckinRoutes } from "./routes/agentCheckin.js";
 import { taskRunRoutes } from "./routes/taskRuns.js";
-import { workspaceRoutes, workspaceDeptRoutes } from "./routes/workspaces.js";
+import { workspaceRoutes, workspaceDeptRoutes, workspaceFileRoutes } from "./routes/workspaces.js";
+import { incidentDeptRoutes, incidentRoutes } from "./routes/incidents.js";
+import { webhookCompanyRoutes, webhookRoutes } from "./routes/webhooks.js";
 import { requestId } from "./middleware/requestId.js";
 import { auditMiddleware } from "./middleware/audit.js";
 import { errorHandler } from "./middleware/errorHandler.js";
@@ -39,6 +41,12 @@ export function createApp() {
   app.use("/api/audit-logs", auditRoutes());
   app.use("/api/departments/:deptId/workspaces", workspaceDeptRoutes());
   app.use("/api/workspaces", workspaceRoutes());
+  app.use("/api/workspaces/:workspaceId/files", workspaceFileRoutes());
+  app.use("/api/departments/:deptId/incidents", incidentDeptRoutes());
+  app.use("/api/incidents", incidentRoutes());
+  app.use("/api/companies/:companyId/audit-logs", auditCompanyRoutes());
+  app.use("/api/companies/:companyId/webhooks", webhookCompanyRoutes());
+  app.use("/api/webhooks", webhookRoutes());
 
   // Error handler (must be last)
   app.use(errorHandler());

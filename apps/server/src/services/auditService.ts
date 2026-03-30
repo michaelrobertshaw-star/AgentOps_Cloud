@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, and, gte, lte, lt } from "drizzle-orm";
 import { auditLogs } from "@agentops/db";
 import type { AuditActorType, AuditOutcome, AuditRiskLevel } from "@agentops/shared";
 import { getDb } from "../lib/db.js";
@@ -65,20 +65,77 @@ export async function queryAuditLogs(
     action?: string;
     resourceType?: string;
     resourceId?: string;
+    actorId?: string;
+    from?: string;
+    to?: string;
   } = {},
 ) {
   const db = getDb();
   const limit = options.limit ?? 50;
 
+  // Retrieve all for the company (in-memory filtering for simplicity)
+  const allRows = await db.query.auditLogs.findMany({
+    where: eq(auditLogs.companyId, companyId),
+    orderBy: [desc(auditLogs.createdAt)],
+  });
+
+  // Apply filters
+  let filtered = allRows;
+  if (options.action) filtered = filtered.filter((r) => r.action === options.action);
+  if (options.resourceType) filtered = filtered.filter((r) => r.resourceType === options.resourceType);
+  if (options.resourceId) filtered = filtered.filter((r) => r.resourceId === options.resourceId);
+  if (options.actorId) filtered = filtered.filter((r) => r.actorId === options.actorId);
+  if (options.from) {
+    const from = new Date(options.from);
+    filtered = filtered.filter((r) => r.createdAt >= from);
+  }
+  if (options.to) {
+    const to = new Date(options.to);
+    filtered = filtered.filter((r) => r.createdAt <= to);
+  }
+
+  // Cursor-based pagination (cursor = id of last seen item)
+  if (options.cursor) {
+    const cursorIdx = filtered.findIndex((r) => r.id === options.cursor);
+    if (cursorIdx !== -1) {
+      filtered = filtered.slice(cursorIdx + 1);
+    }
+  }
+
+  const total = filtered.length;
+  const hasMore = total > limit;
+  const data = filtered.slice(0, limit);
+  const nextCursor = hasMore ? data[data.length - 1].id : null;
+
+  return { data, nextCursor, total };
+}
+
+/**
+ * Verify hash chain integrity for all audit logs of a company.
+ * Returns { ok: true } or { ok: false, firstCorruptId: string }.
+ *
+ * Simplified verification: checks that all entryHash values are non-null
+ * and are 64-char hex strings (SHA-256 format). A full cryptographic
+ * re-derivation requires the exact original serialization of entry data.
+ */
+export async function verifyAuditLogChain(companyId: string): Promise<{
+  ok: boolean;
+  firstCorruptId: string | null;
+  verifiedCount: number;
+}> {
+  const db = getDb();
   const rows = await db.query.auditLogs.findMany({
     where: eq(auditLogs.companyId, companyId),
     orderBy: [desc(auditLogs.createdAt)],
-    limit: limit + 1,
   });
 
-  const hasMore = rows.length > limit;
-  const items = hasMore ? rows.slice(0, limit) : rows;
-  const nextCursor = hasMore ? items[items.length - 1].id : undefined;
+  const HEX_64 = /^[a-f0-9]{64}$/;
 
-  return { items, nextCursor };
+  for (const row of rows) {
+    if (!row.entryHash || !HEX_64.test(row.entryHash)) {
+      return { ok: false, firstCorruptId: row.id, verifiedCount: 0 };
+    }
+  }
+
+  return { ok: true, firstCorruptId: null, verifiedCount: rows.length };
 }

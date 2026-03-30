@@ -8,6 +8,27 @@
       "when": 1774840569143,
       "tag": "0000_fuzzy_wolfpack",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1774840570000,
+      "tag": "0002_workspace_files_soft_delete",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1774840571000,
+      "tag": "0003_incident_attachments",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1774840572000,
+      "tag": "0004_webhook_deliveries",
+      "breakpoints": true
     }
   ]
 }

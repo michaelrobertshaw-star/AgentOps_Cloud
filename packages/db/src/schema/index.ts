@@ -419,6 +419,7 @@ export const workspaceFiles = pgTable(
     checksum: varchar("checksum", { length: 64 }),
     uploadedByUserId: uuid("uploaded_by_user_id").references(() => users.id),
     uploadedByAgentId: uuid("uploaded_by_agent_id").references(() => agents.id),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
@@ -456,6 +457,34 @@ export const incidents = pgTable(
   (table) => [
     index("idx_incidents_company").on(table.companyId),
     index("idx_incidents_status").on(table.companyId, table.status),
+  ],
+);
+
+// ================================================================
+// INCIDENT ATTACHMENTS
+// ================================================================
+
+export const incidentAttachments = pgTable(
+  "incident_attachments",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    incidentId: uuid("incident_id")
+      .references(() => incidents.id, { onDelete: "cascade" })
+      .notNull(),
+    workspaceFileId: uuid("workspace_file_id")
+      .references(() => workspaceFiles.id, { onDelete: "cascade" })
+      .notNull(),
+    attachedByUserId: uuid("attached_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("idx_incident_attachments_unique").on(table.incidentId, table.workspaceFileId),
+    index("idx_incident_attachments_incident").on(table.incidentId),
   ],
 );
 
@@ -542,4 +571,34 @@ export const webhooks = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [index("idx_webhooks_company").on(table.companyId, table.status)],
+);
+
+// ================================================================
+// WEBHOOK DELIVERIES
+// ================================================================
+
+export const webhookDeliveries = pgTable(
+  "webhook_deliveries",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    webhookId: uuid("webhook_id")
+      .references(() => webhooks.id, { onDelete: "cascade" })
+      .notNull(),
+    eventType: varchar("event_type", { length: 100 }).notNull(),
+    payload: jsonb("payload").notNull(),
+    statusCode: integer("status_code"),
+    responseBody: text("response_body"),
+    attemptNumber: integer("attempt_number").default(1).notNull(),
+    success: boolean("success").notNull(),
+    errorMessage: text("error_message"),
+    durationMs: integer("duration_ms"),
+    deliveredAt: timestamp("delivered_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_webhook_deliveries_webhook").on(table.webhookId),
+    index("idx_webhook_deliveries_company_time").on(table.companyId, table.deliveredAt),
+  ],
 );

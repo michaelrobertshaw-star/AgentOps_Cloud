@@ -6,6 +6,7 @@ import {
   HeadObjectCommand,
   ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { getEnv } from "../config/env.js";
 import pino from "pino";
 
@@ -253,6 +254,21 @@ export async function listWorkspaceFiles(
     .map((obj) => obj.Key ?? "")
     .filter(Boolean)
     .map((key) => key.slice(prefix.length));
+}
+
+/**
+ * Generate a presigned URL for a workspace file download.
+ * Default TTL: 15 minutes (900 seconds).
+ */
+export async function getWorkspaceFilePresignedUrl(
+  key: string,
+  expiresIn = 900,
+): Promise<string> {
+  const client = getS3Client();
+  const bucket = getWorkspaceBucket();
+
+  const command = new GetObjectCommand({ Bucket: bucket, Key: key });
+  return getSignedUrl(client, command, { expiresIn });
 }
 
 /**

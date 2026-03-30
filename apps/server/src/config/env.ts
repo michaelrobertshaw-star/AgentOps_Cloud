@@ -25,6 +25,8 @@ const envSchema = z.object({
   S3_BUCKET: z.string().default("agentops-outputs"),
   S3_WORKSPACE_BUCKET: z.string().default("workspaces"),
   S3_AUDIT_BUCKET: z.string().default("audit-archive"),
+  // File upload limits
+  MAX_FILE_SIZE_BYTES: z.coerce.number().default(100 * 1024 * 1024), // 100MB
 });
 
 export type Env = z.infer<typeof envSchema>;
