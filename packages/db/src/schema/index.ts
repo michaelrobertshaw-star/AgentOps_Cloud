@@ -129,6 +129,7 @@ export const companies = pgTable(
     region: varchar("region", { length: 50 }),
     billingPlan: varchar("billing_plan", { length: 50 }).default("free"),
     billingCustomerId: varchar("billing_customer_id", { length: 255 }),
+    auditRetentionDays: integer("audit_retention_days").default(90).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -514,6 +515,7 @@ export const auditLogs = pgTable(
     userAgent: text("user_agent"),
     requestId: uuid("request_id"),
     entryHash: varchar("entry_hash", { length: 64 }).notNull(),
+    prevHash: varchar("prev_hash", { length: 64 }), // nullable for backward compat; links to previous entry
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [

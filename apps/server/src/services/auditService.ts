@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { desc, eq, and, gte, lte, lt } from "drizzle-orm";
+import { desc, asc, eq, and, gte, lte, lt } from "drizzle-orm";
 import { auditLogs } from "@agentops/db";
 import type { AuditActorType, AuditOutcome, AuditRiskLevel } from "@agentops/shared";
 import { getDb } from "../lib/db.js";
@@ -32,9 +32,10 @@ export async function writeAuditLog(entry: AuditEntry): Promise<void> {
     ...entry,
     timestamp: new Date().toISOString(),
   });
+  const prevHash = lastHash; // capture before updating
   const entryHash = crypto
     .createHash("sha256")
-    .update(lastHash + entryData)
+    .update(prevHash + entryData)
     .digest("hex");
   lastHash = entryHash;
 
@@ -54,6 +55,7 @@ export async function writeAuditLog(entry: AuditEntry): Promise<void> {
     userAgent: entry.userAgent,
     requestId: entry.requestId,
     entryHash,
+    prevHash,
   });
 }
 
@@ -112,11 +114,13 @@ export async function queryAuditLogs(
 
 /**
  * Verify hash chain integrity for all audit logs of a company.
- * Returns { ok: true } or { ok: false, firstCorruptId: string }.
  *
- * Simplified verification: checks that all entryHash values are non-null
- * and are 64-char hex strings (SHA-256 format). A full cryptographic
- * re-derivation requires the exact original serialization of entry data.
+ * Checks two things:
+ *   1. Each entryHash is a valid 64-char hex SHA-256 string.
+ *   2. For entries that have prevHash stored, the chain linkage is intact:
+ *      row[n].prevHash must equal row[n-1].entryHash (or "000...0" for the first).
+ *
+ * Returns { ok: true } or { ok: false, firstCorruptId: string }.
  */
 export async function verifyAuditLogChain(companyId: string): Promise<{
   ok: boolean;
@@ -124,17 +128,29 @@ export async function verifyAuditLogChain(companyId: string): Promise<{
   verifiedCount: number;
 }> {
   const db = getDb();
+  // Ascending order so we walk the chain from oldest to newest
   const rows = await db.query.auditLogs.findMany({
     where: eq(auditLogs.companyId, companyId),
-    orderBy: [desc(auditLogs.createdAt)],
+    orderBy: [asc(auditLogs.createdAt)],
   });
 
   const HEX_64 = /^[a-f0-9]{64}$/;
+  let expectedPrevHash = "0".repeat(64);
 
   for (const row of rows) {
+    // Check format
     if (!row.entryHash || !HEX_64.test(row.entryHash)) {
       return { ok: false, firstCorruptId: row.id, verifiedCount: 0 };
     }
+
+    // Check chain linkage when prevHash is stored (skips legacy rows without it)
+    if (row.prevHash != null) {
+      if (row.prevHash !== expectedPrevHash) {
+        return { ok: false, firstCorruptId: row.id, verifiedCount: 0 };
+      }
+    }
+
+    expectedPrevHash = row.entryHash;
   }
 
   return { ok: true, firstCorruptId: null, verifiedCount: rows.length };

@@ -3,7 +3,7 @@ import { healthRoutes } from "./routes/health.js";
 import { authRoutes } from "./routes/auth.js";
 import { companyRoutes } from "./routes/companies.js";
 import { departmentRoutes } from "./routes/departments.js";
-import { auditRoutes, auditCompanyRoutes } from "./routes/audit.js";
+import { auditRoutes, auditCompanyRoutes, auditArchiveCompanyRoutes } from "./routes/audit.js";
 import { agentRoutes } from "./routes/agents.js";
 import { agentKeyRoutes } from "./routes/agentKeys.js";
 import { taskRoutes } from "./routes/tasks.js";
@@ -45,6 +45,7 @@ export function createApp() {
   app.use("/api/departments/:deptId/incidents", incidentDeptRoutes());
   app.use("/api/incidents", incidentRoutes());
   app.use("/api/companies/:companyId/audit-logs", auditCompanyRoutes());
+  app.use("/api/companies/:companyId/audit", auditArchiveCompanyRoutes());
   app.use("/api/companies/:companyId/webhooks", webhookCompanyRoutes());
   app.use("/api/webhooks", webhookRoutes());
 

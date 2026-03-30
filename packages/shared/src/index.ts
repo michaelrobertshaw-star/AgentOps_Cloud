@@ -70,6 +70,7 @@ export type Permission =
   | "incident:view"
   | "incident:manage"
   | "audit:view"
+  | "audit:manage"
   | "apikey:manage"
   | "user:manage"
   | "user:invite_dept";
@@ -97,6 +98,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     "incident:view",
     "incident:manage",
     "audit:view",
+    "audit:manage",
     "apikey:manage",
     "user:manage",
     "user:invite_dept",
