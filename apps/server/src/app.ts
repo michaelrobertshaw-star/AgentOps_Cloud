@@ -9,9 +9,11 @@ import { agentKeyRoutes } from "./routes/agentKeys.js";
 import { taskRoutes } from "./routes/tasks.js";
 import { agentCheckinRoutes } from "./routes/agentCheckin.js";
 import { taskRunRoutes } from "./routes/taskRuns.js";
+import { workspaceRoutes, workspaceDeptRoutes } from "./routes/workspaces.js";
 import { requestId } from "./middleware/requestId.js";
 import { auditMiddleware } from "./middleware/audit.js";
 import { errorHandler } from "./middleware/errorHandler.js";
+import { rateLimitMiddleware } from "./middleware/rateLimit.js";
 
 export function createApp() {
   const app = express();
@@ -19,6 +21,7 @@ export function createApp() {
   // Global middleware
   app.use(express.json());
   app.use(requestId());
+  app.use(rateLimitMiddleware());
   app.use(auditMiddleware());
 
   // Public routes
@@ -34,6 +37,8 @@ export function createApp() {
   app.use("/api/tasks", taskRoutes());
   app.use("/api/tasks/:taskId/runs", taskRunRoutes());
   app.use("/api/audit-logs", auditRoutes());
+  app.use("/api/departments/:deptId/workspaces", workspaceDeptRoutes());
+  app.use("/api/workspaces", workspaceRoutes());
 
   // Error handler (must be last)
   app.use(errorHandler());
