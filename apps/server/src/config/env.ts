@@ -38,6 +38,14 @@ const envSchema = z.object({
   // Session management
   SESSION_MAX_CONCURRENT: z.coerce.number().default(5),
   SESSION_IDLE_TIMEOUT_HOURS: z.coerce.number().default(24),
+  // Email / SMTP
+  SMTP_HOST: z.string().optional(),
+  SMTP_PORT: z.coerce.number().default(587),
+  SMTP_SECURE: z.coerce.boolean().default(false),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
+  SMTP_FROM: z.string().default("AgentOps Cloud <noreply@agentops.cloud>"),
+  APP_BASE_URL: z.string().default("http://localhost:3000"),
 });
 
 export type Env = z.infer<typeof envSchema>;

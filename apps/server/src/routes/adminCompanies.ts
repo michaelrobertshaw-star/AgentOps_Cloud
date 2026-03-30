@@ -14,6 +14,7 @@ import { authenticate } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import { getDb } from "../lib/db.js";
 import { hashPassword } from "../services/authService.js";
+import { sendUserInviteEmail } from "../services/emailService.js";
 import { ForbiddenError, NotFoundError, ConflictError } from "../lib/errors.js";
 import type { Request, Response, NextFunction } from "express";
 
@@ -282,6 +283,16 @@ export function adminCompanyRoutes() {
           .returning();
 
         const { passwordHash: _ph, mfaSecret: _ms, ...safe } = user;
+
+        // Fire invite email (non-blocking — don't fail the request if email delivery fails)
+        sendUserInviteEmail({
+          toEmail: email,
+          toName: name,
+          companyName: company.displayName ?? company.name,
+        }).catch((err) => {
+          console.error("[adminCompanies] Failed to send invite email:", err);
+        });
+
         res.status(201).json(safe);
       } catch (err) {
         next(err);
