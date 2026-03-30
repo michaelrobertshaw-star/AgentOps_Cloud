@@ -1,4 +1,5 @@
 import { requireSession } from "@/lib/auth";
+import { DeployedAgentsPanelClient } from "./DeployedAgentsPanelClient";
 
 export default async function DashboardPage() {
   const session = await requireSession();
@@ -23,6 +24,11 @@ export default async function DashboardPage() {
             <p className="text-3xl font-bold text-gray-900 mt-1">{stat.value}</p>
           </div>
         ))}
+      </div>
+
+      <div className="mt-8">
+        <h2 className="text-lg font-semibold text-gray-900 mb-3">Deployed Agents</h2>
+        <DeployedAgentsPanelClient />
       </div>
     </div>
   );
