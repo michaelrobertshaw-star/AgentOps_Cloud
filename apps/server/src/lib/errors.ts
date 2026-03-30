@@ -39,3 +39,9 @@ export class ValidationError extends AppError {
     super(400, "VALIDATION_ERROR", message, details);
   }
 }
+
+export class PaymentRequiredError extends AppError {
+  constructor(message: string) {
+    super(402, "SPEND_CAP_EXCEEDED", message);
+  }
+}

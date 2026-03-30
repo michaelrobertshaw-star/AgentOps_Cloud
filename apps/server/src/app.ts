@@ -15,6 +15,10 @@ import { incidentDeptRoutes, incidentRoutes } from "./routes/incidents.js";
 import { webhookCompanyRoutes, webhookRoutes } from "./routes/webhooks.js";
 import { sessionRoutes } from "./routes/sessions.js";
 import { connectorRoutes, agentConnectorRoutes } from "./routes/connectors.js";
+import { adminCompanyRoutes } from "./routes/adminCompanies.js";
+import { skillRoutes, agentSkillRoutes } from "./routes/skills.js";
+import { usageRoutes } from "./routes/usage.js";
+import { agentRunRoutes, agentRunDetailRoutes } from "./routes/agentRuns.js";
 import { requestId } from "./middleware/requestId.js";
 import { auditMiddleware } from "./middleware/audit.js";
 import { errorHandler } from "./middleware/errorHandler.js";
@@ -55,6 +59,12 @@ export function createApp() {
   app.use("/api/webhooks", webhookRoutes());
   app.use("/api/connectors", connectorRoutes());
   app.use("/api/agents/:agentId/connectors", agentConnectorRoutes());
+  app.use("/api/admin/companies", adminCompanyRoutes());
+  app.use("/api/skills", skillRoutes());
+  app.use("/api/agents/:agentId/skills", agentSkillRoutes());
+  app.use("/api/usage", usageRoutes());
+  app.use("/api/agents/:agentId", agentRunRoutes());
+  app.use("/api/agent-runs", agentRunDetailRoutes());
 
   // Error handler (must be last)
   app.use(errorHandler());

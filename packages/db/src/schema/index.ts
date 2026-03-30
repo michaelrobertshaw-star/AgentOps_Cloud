@@ -158,6 +158,7 @@ export const users = pgTable(
     status: userStatusEnum("status").default("active").notNull(),
     mfaEnabled: boolean("mfa_enabled").default(false).notNull(),
     mfaSecret: varchar("mfa_secret", { length: 255 }),
+    superAdmin: boolean("super_admin").default(false).notNull(),
     lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -740,6 +741,94 @@ export const agentRuns = pgTable(
 );
 
 // ================================================================
+// BROWSER SESSIONS (M6.4 — computer-use / browser connector runs)
+// ================================================================
+
+export const browserSessions = pgTable(
+  "browser_sessions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    agentRunId: uuid("agent_run_id")
+      .references(() => agentRuns.id, { onDelete: "cascade" })
+      .notNull(),
+    screenshots: jsonb("screenshots").default([]).notNull(),
+    actions: jsonb("actions").default([]).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [index("idx_browser_sessions_run").on(table.agentRunId)],
+);
+
+// ================================================================
+// COMPANY SETTINGS (M6.1)
+// ================================================================
+
+export const companySettings = pgTable(
+  "company_settings",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    key: varchar("key", { length: 100 }).notNull(),
+    value: jsonb("value").default(null).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("idx_company_settings_company_key").on(table.companyId, table.key),
+    index("idx_company_settings_company").on(table.companyId),
+  ],
+);
+
+// ================================================================
+// SKILLS (M6.2)
+// ================================================================
+
+export const skills = pgTable(
+  "skills",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    name: varchar("name", { length: 100 }).notNull(),
+    description: text("description"),
+    content: jsonb("content").default({}).notNull(),
+    version: integer("version").default(1).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("idx_skills_company_name").on(table.companyId, table.name),
+    index("idx_skills_company").on(table.companyId),
+  ],
+);
+
+export const agentSkills = pgTable(
+  "agent_skills",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    agentId: uuid("agent_id")
+      .references(() => agents.id, { onDelete: "cascade" })
+      .notNull(),
+    skillId: uuid("skill_id")
+      .references(() => skills.id, { onDelete: "cascade" })
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("idx_agent_skills_unique").on(table.agentId, table.skillId),
+    index("idx_agent_skills_agent").on(table.agentId),
+    index("idx_agent_skills_skill").on(table.skillId),
+    index("idx_agent_skills_company").on(table.companyId),
+  ],
+);
+
+// ================================================================
 // DRIZZLE RELATIONS (for query builder `with` syntax)
 // ================================================================
 
@@ -752,6 +841,17 @@ export const agentConnectorsRelations = relations(agentConnectors, ({ one }) => 
   }),
   agent: one(agents, {
     fields: [agentConnectors.agentId],
+    references: [agents.id],
+  }),
+}));
+
+export const agentSkillsRelations = relations(agentSkills, ({ one }) => ({
+  skill: one(skills, {
+    fields: [agentSkills.skillId],
+    references: [skills.id],
+  }),
+  agent: one(agents, {
+    fields: [agentSkills.agentId],
     references: [agents.id],
   }),
 }));

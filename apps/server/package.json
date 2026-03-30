@@ -12,6 +12,7 @@
   "dependencies": {
     "@agentops/db": "workspace:*",
     "@agentops/shared": "workspace:*",
+    "@anthropic-ai/sdk": "^0.80.0",
     "@aws-sdk/client-s3": "^3.1019.0",
     "@aws-sdk/s3-request-presigner": "^3.1019.0",
     "bcrypt": "^6.0.0",
