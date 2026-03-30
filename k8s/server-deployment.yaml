@@ -1,0 +1,107 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentops-server
+  namespace: agentops
+  labels:
+    app.kubernetes.io/name: agentops-server
+    app.kubernetes.io/component: api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: agentops-server
+  template:
+    metadata:
+      labels:
+        app: agentops-server
+        app.kubernetes.io/name: agentops-server
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      containers:
+        - name: server
+          image: ghcr.io/agentops/agentops-cloud-server:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 4000
+              name: http
+          envFrom:
+            - configMapRef:
+                name: agentops-config
+          env:
+            # Assemble connection strings from config + secrets
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: agentops-secrets
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: agentops-secrets
+                  key: POSTGRES_PASSWORD
+            - name: DATABASE_URL
+              value: "postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DB)"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: agentops-secrets
+                  key: REDIS_PASSWORD
+            - name: REDIS_URL
+              value: "redis://:$(REDIS_PASSWORD)@$(REDIS_HOST):$(REDIS_PORT)"
+            - name: S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agentops-secrets
+                  key: S3_ACCESS_KEY
+            - name: S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agentops-secrets
+                  key: S3_SECRET_KEY
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: agentops-secrets
+                  key: JWT_SECRET
+            - name: JWT_SECRET_SECONDARY
+              valueFrom:
+                secretKeyRef:
+                  name: agentops-secrets
+                  key: JWT_SECRET_SECONDARY
+            - name: MFA_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agentops-secrets
+                  key: MFA_ENCRYPTION_KEY
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

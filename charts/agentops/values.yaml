@@ -1,0 +1,113 @@
+# Default values for agentops Helm chart.
+# Override with: helm install agentops ./charts/agentops -f my-values.yaml
+
+global:
+  imageRegistry: ghcr.io
+  imageRepository: agentops/agentops-cloud
+  imageTag: latest
+  imagePullPolicy: IfNotPresent
+  namespace: agentops
+
+# ── Server (API) ─────────────────────────────────────────────────────────────
+server:
+  replicaCount: 2
+  image:
+    suffix: "-server"
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  service:
+    port: 4000
+  env:
+    PORT: "4000"
+    HOST: "0.0.0.0"
+    NODE_ENV: "production"
+    JWT_ISSUER: "agentops.cloud"
+    JWT_AUDIENCE: "agentops-api"
+    JWT_ACCESS_TOKEN_TTL: "900"
+    JWT_REFRESH_TOKEN_TTL: "604800"
+    S3_REGION: "us-east-1"
+    S3_BUCKET: "agentops-outputs"
+    S3_WORKSPACE_BUCKET: "workspaces"
+    S3_AUDIT_BUCKET: "audit-archive"
+    KEY_ROTATION_GRACE_HOURS: "24"
+
+# ── Web (Next.js) ─────────────────────────────────────────────────────────────
+web:
+  replicaCount: 2
+  image:
+    suffix: "-web"
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+  service:
+    port: 3000
+  env:
+    NODE_ENV: "production"
+
+# ── Ingress ──────────────────────────────────────────────────────────────────
+ingress:
+  enabled: true
+  className: nginx
+  host: agentops.example.com
+  tls:
+    enabled: true
+    secretName: agentops-tls
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+
+# ── Database ─────────────────────────────────────────────────────────────────
+postgres:
+  # Set host to an external Postgres (RDS, CloudSQL, etc.) for production
+  host: "postgres-svc"
+  port: "5432"
+  database: "agentops"
+
+# ── Redis ─────────────────────────────────────────────────────────────────────
+redis:
+  host: "redis-svc"
+  port: "6379"
+
+# ── S3/MinIO ─────────────────────────────────────────────────────────────────
+s3:
+  endpoint: "http://minio-svc:9000"
+
+# ── Secrets ──────────────────────────────────────────────────────────────────
+# All secret values MUST be overridden at deploy time.
+# Never set real values here — use --set or a sealed-secrets overlay.
+secrets:
+  # Database
+  postgresUser: "REPLACE_ME"
+  postgresPassword: "REPLACE_ME"
+  # Redis
+  redisPassword: "REPLACE_ME"
+  # MinIO / S3
+  s3AccessKey: "REPLACE_ME"
+  s3SecretKey: "REPLACE_ME"
+  # JWT (generate with: openssl rand -hex 64)
+  jwtSecret: "REPLACE_ME"
+  jwtSecretSecondary: ""
+  # MFA encryption key (exactly 32 chars)
+  mfaEncryptionKey: "REPLACE_ME_32_BYTES_EXACTLY!!!!!"
+
+# ── Probes ───────────────────────────────────────────────────────────────────
+probes:
+  liveness:
+    initialDelaySeconds: 15
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3

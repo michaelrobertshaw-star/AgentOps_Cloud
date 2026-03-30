@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentops-web-svc
+  namespace: agentops
+  labels:
+    app.kubernetes.io/name: agentops-web
+    app.kubernetes.io/component: frontend
+spec:
+  selector:
+    app: agentops-web
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+  type: ClusterIP

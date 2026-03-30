@@ -1,0 +1,44 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agentops-ingress
+  namespace: agentops
+  labels:
+    app.kubernetes.io/name: agentops
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    # TLS redirect
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # WebSocket support for /api/ws
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection "upgrade";
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - agentops.example.com
+      secretName: agentops-tls
+  rules:
+    - host: agentops.example.com
+      http:
+        paths:
+          # API + WebSocket traffic → server
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: agentops-server-svc
+                port:
+                  name: http
+          # All other traffic → web frontend
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: agentops-web-svc
+                port:
+                  name: http

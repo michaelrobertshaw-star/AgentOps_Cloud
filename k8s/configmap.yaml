@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agentops-config
+  namespace: agentops
+  labels:
+    app.kubernetes.io/name: agentops
+data:
+  NODE_ENV: "production"
+  PORT: "4000"
+  HOST: "0.0.0.0"
+  # Database — hostname only; credentials in Secret
+  POSTGRES_DB: "agentops"
+  POSTGRES_HOST: "postgres-svc"
+  POSTGRES_PORT: "5432"
+  # Redis — hostname only; password in Secret
+  REDIS_HOST: "redis-svc"
+  REDIS_PORT: "6379"
+  # S3/MinIO
+  S3_ENDPOINT: "http://minio-svc:9000"
+  S3_REGION: "us-east-1"
+  S3_BUCKET: "agentops-outputs"
+  S3_WORKSPACE_BUCKET: "workspaces"
+  S3_AUDIT_BUCKET: "audit-archive"
+  # JWT defaults (override via Secret for actual secrets)
+  JWT_ISSUER: "agentops.cloud"
+  JWT_AUDIENCE: "agentops-api"
+  JWT_ACCESS_TOKEN_TTL: "900"
+  # Audit
+  KEY_ROTATION_GRACE_HOURS: "24"

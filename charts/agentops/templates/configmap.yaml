@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-config
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "agentops.labels" . | nindent 4 }}
+data:
+  NODE_ENV: {{ .Values.server.env.NODE_ENV | quote }}
+  PORT: {{ .Values.server.service.port | quote }}
+  HOST: {{ .Values.server.env.HOST | quote }}
+  POSTGRES_HOST: {{ .Values.postgres.host | quote }}
+  POSTGRES_PORT: {{ .Values.postgres.port | quote }}
+  POSTGRES_DB: {{ .Values.postgres.database | quote }}
+  REDIS_HOST: {{ .Values.redis.host | quote }}
+  REDIS_PORT: {{ .Values.redis.port | quote }}
+  S3_ENDPOINT: {{ .Values.s3.endpoint | quote }}
+  S3_REGION: {{ .Values.server.env.S3_REGION | quote }}
+  S3_BUCKET: {{ .Values.server.env.S3_BUCKET | quote }}
+  S3_WORKSPACE_BUCKET: {{ .Values.server.env.S3_WORKSPACE_BUCKET | quote }}
+  S3_AUDIT_BUCKET: {{ .Values.server.env.S3_AUDIT_BUCKET | quote }}
+  JWT_ISSUER: {{ .Values.server.env.JWT_ISSUER | quote }}
+  JWT_AUDIENCE: {{ .Values.server.env.JWT_AUDIENCE | quote }}
+  JWT_ACCESS_TOKEN_TTL: {{ .Values.server.env.JWT_ACCESS_TOKEN_TTL | quote }}
+  JWT_REFRESH_TOKEN_TTL: {{ .Values.server.env.JWT_REFRESH_TOKEN_TTL | quote }}
+  KEY_ROTATION_GRACE_HOURS: {{ .Values.server.env.KEY_ROTATION_GRACE_HOURS | quote }}

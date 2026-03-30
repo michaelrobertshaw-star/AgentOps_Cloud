@@ -105,3 +105,67 @@ curl http://localhost:4000/api/health/minio
 GitHub Actions runs on every PR and push to `main`:
 - Lint + format check + type check
 - Tests with a real Postgres instance
+- Docker images built and pushed to GHCR on `main` merges
+
+## Deployment
+
+### Docker Compose (production)
+
+```bash
+# Copy and fill in all required secrets
+cp .env.example .env.prod
+
+# Pull latest images and start
+IMAGE_TAG=sha-<commit> docker compose -f docker-compose.prod.yml up -d
+```
+
+Required environment variables for `docker-compose.prod.yml`:
+
+| Variable               | Description                           |
+| ---------------------- | ------------------------------------- |
+| `POSTGRES_PASSWORD`    | PostgreSQL password                   |
+| `REDIS_PASSWORD`       | Redis password                        |
+| `MINIO_ROOT_USER`      | MinIO admin username                  |
+| `MINIO_ROOT_PASSWORD`  | MinIO admin password                  |
+| `JWT_SECRET`           | JWT signing secret (64-char hex)      |
+| `MFA_ENCRYPTION_KEY`   | MFA encryption key (exactly 32 bytes) |
+
+### Kubernetes (raw manifests)
+
+```bash
+kubectl apply -f k8s/namespace.yaml
+kubectl apply -f k8s/configmap.yaml
+# Fill in k8s/secret.yaml — NEVER commit real values
+kubectl apply -f k8s/
+```
+
+### Helm
+
+```bash
+helm upgrade --install agentops ./charts/agentops \
+  --namespace agentops --create-namespace \
+  --set global.imageTag=sha-<commit> \
+  --set secrets.postgresPassword=<secret> \
+  --set secrets.redisPassword=<secret> \
+  --set secrets.jwtSecret=<secret> \
+  --set secrets.mfaEncryptionKey=<32-byte-key> \
+  --set secrets.s3AccessKey=<key> \
+  --set secrets.s3SecretKey=<secret> \
+  --set ingress.host=agentops.yourdomain.com
+```
+
+### Docker images
+
+Images are published to GHCR on every merge to `main`:
+
+| Image                                          | Description      |
+| ---------------------------------------------- | ---------------- |
+| `ghcr.io/<org>/agentops-cloud-server:latest`   | API server       |
+| `ghcr.io/<org>/agentops-cloud-web:latest`      | Next.js frontend |
+
+### Health checks (K8s liveness/readiness probes)
+
+```bash
+GET /api/health        → { status: "ok", timestamp: "..." }
+GET /api/health/minio  → { status: "ok"|"error", minio: {...} }
+```

@@ -1,0 +1,14 @@
+apiVersion: v2
+name: agentops
+description: AgentOps Cloud v2 — Multi-tenant AI Operations Platform
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - agentops
+  - ai
+  - operations
+home: https://github.com/agentops/agentops-cloud
+maintainers:
+  - name: AgentOps Team
+    email: ops@agentops.cloud

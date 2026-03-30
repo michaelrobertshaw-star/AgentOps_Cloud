@@ -1,0 +1,140 @@
+version: "3.9"
+
+# Production docker-compose — uses pre-built images from GHCR.
+# Set IMAGE_TAG (default: latest) to pin a specific release.
+# All secrets must be provided via environment or a .env file — never committed.
+
+x-common-env: &common-env
+  NODE_ENV: production
+
+services:
+  # ── Infrastructure ──────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-agentops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      POSTGRES_DB: ${POSTGRES_DB:-agentops}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agentops}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD:?required}
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?required}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?required}
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD &&
+        mc mb --ignore-existing local/agentops-outputs &&
+        mc mb --ignore-existing local/workspaces &&
+        mc mb --ignore-existing local/audit-archive
+      "
+    networks:
+      - backend
+    restart: on-failure
+
+  # ── Application ─────────────────────────────────────────────────────────────
+
+  server:
+    image: ghcr.io/${GITHUB_REPOSITORY:-agentops/agentops-cloud}-server:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+      PORT: "4000"
+      HOST: "0.0.0.0"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-agentops}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-agentops}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      JWT_SECRET: ${JWT_SECRET:?required}
+      JWT_SECRET_SECONDARY: ${JWT_SECRET_SECONDARY:-}
+      MFA_ENCRYPTION_KEY: ${MFA_ENCRYPTION_KEY:?required}
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: us-east-1
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_BUCKET: agentops-outputs
+      S3_WORKSPACE_BUCKET: workspaces
+      S3_AUDIT_BUCKET: audit-archive
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4000/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    networks:
+      - backend
+      - frontend
+
+  web:
+    image: ghcr.io/${GITHUB_REPOSITORY:-agentops/agentops-cloud}-web:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://server:4000}
+    networks:
+      - frontend
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+
+networks:
+  backend:
+    internal: true
+  frontend:
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:

@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agentops
+  labels:
+    app.kubernetes.io/name: agentops
+    app.kubernetes.io/part-of: agentops-cloud
