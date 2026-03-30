@@ -8,7 +8,7 @@
  *  - ping/pong keepalive
  *  - Invalid message handling
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import http from "http";
 import WebSocket from "ws";
 import { WsService } from "./wsService.js";

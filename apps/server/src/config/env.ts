@@ -14,6 +14,9 @@ const envSchema = z.object({
   JWT_ACCESS_TOKEN_TTL: z.coerce.number().default(900), // 15 minutes
   JWT_REFRESH_TOKEN_TTL: z.coerce.number().default(604800), // 7 days
   BCRYPT_ROUNDS: z.coerce.number().default(12),
+  // Rate limiting
+  RATE_LIMIT_COMPANY_RPM: z.coerce.number().default(1000),
+  RATE_LIMIT_USER_RPM: z.coerce.number().default(100),
   // S3/MinIO configuration
   S3_ENDPOINT: z.string().default("http://localhost:9000"),
   S3_REGION: z.string().default("us-east-1"),
