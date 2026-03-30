@@ -12,9 +12,12 @@
   "dependencies": {
     "@agentops/db": "workspace:*",
     "@agentops/shared": "workspace:*",
+    "@aws-sdk/client-s3": "^3.1019.0",
     "bcrypt": "^6.0.0",
+    "bullmq": "^5.71.1",
     "drizzle-orm": "^0.38.0",
     "express": "^5.0.1",
+    "ioredis": "^5.10.1",
     "jose": "^6.2.2",
     "pino": "^9.6.0",
     "pino-pretty": "^13.0.0",

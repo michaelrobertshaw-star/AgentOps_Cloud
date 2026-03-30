@@ -1,0 +1,141 @@
+import {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+  DeleteObjectCommand,
+  HeadObjectCommand,
+} from "@aws-sdk/client-s3";
+import { getEnv } from "../config/env.js";
+import pino from "pino";
+
+const logger = pino({ name: "storage" });
+
+let s3Client: S3Client | undefined;
+
+function getS3Client(): S3Client {
+  if (!s3Client) {
+    const env = getEnv();
+    s3Client = new S3Client({
+      endpoint: env.S3_ENDPOINT,
+      region: env.S3_REGION,
+      credentials: {
+        accessKeyId: env.S3_ACCESS_KEY,
+        secretAccessKey: env.S3_SECRET_KEY,
+      },
+      forcePathStyle: true, // Required for MinIO
+    });
+  }
+  return s3Client;
+}
+
+function getBucket(): string {
+  return getEnv().S3_BUCKET;
+}
+
+/**
+ * Build the S3 key for a task output artifact.
+ * Format: {companyId}/{taskId}/runs/{runNumber}/{filename}
+ */
+export function buildOutputKey(
+  companyId: string,
+  taskId: string,
+  runNumber: number,
+  filename: string,
+): string {
+  return `${companyId}/${taskId}/runs/${runNumber}/${filename}`;
+}
+
+/**
+ * Upload task output to S3/MinIO.
+ */
+export async function uploadTaskOutput(
+  key: string,
+  body: Buffer | string,
+  contentType: string = "application/json",
+): Promise<string> {
+  const client = getS3Client();
+  const bucket = getBucket();
+
+  await client.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: typeof body === "string" ? Buffer.from(body) : body,
+      ContentType: contentType,
+    }),
+  );
+
+  const ref = `s3://${bucket}/${key}`;
+  logger.info({ key, bucket }, "Uploaded task output");
+  return ref;
+}
+
+/**
+ * Download task output from S3/MinIO.
+ */
+export async function downloadTaskOutput(key: string): Promise<{
+  body: Buffer;
+  contentType: string;
+}> {
+  const client = getS3Client();
+  const bucket = getBucket();
+
+  const response = await client.send(
+    new GetObjectCommand({
+      Bucket: bucket,
+      Key: key,
+    }),
+  );
+
+  const body = await streamToBuffer(response.Body as NodeJS.ReadableStream);
+  return {
+    body,
+    contentType: response.ContentType || "application/octet-stream",
+  };
+}
+
+/**
+ * Check if an object exists.
+ */
+export async function outputExists(key: string): Promise<boolean> {
+  const client = getS3Client();
+  const bucket = getBucket();
+
+  try {
+    await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Delete task output from S3/MinIO.
+ */
+export async function deleteTaskOutput(key: string): Promise<void> {
+  const client = getS3Client();
+  const bucket = getBucket();
+
+  await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+  logger.info({ key, bucket }, "Deleted task output");
+}
+
+/**
+ * Parse an S3 reference (s3://bucket/key) back to just the key.
+ */
+export function parseOutputRef(ref: string): { bucket: string; key: string } {
+  const stripped = ref.replace("s3://", "");
+  const slashIndex = stripped.indexOf("/");
+  return {
+    bucket: stripped.slice(0, slashIndex),
+    key: stripped.slice(slashIndex + 1),
+  };
+}
+
+async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of stream) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+  }
+  return Buffer.concat(chunks);
+}

@@ -14,6 +14,12 @@ const envSchema = z.object({
   JWT_ACCESS_TOKEN_TTL: z.coerce.number().default(900), // 15 minutes
   JWT_REFRESH_TOKEN_TTL: z.coerce.number().default(604800), // 7 days
   BCRYPT_ROUNDS: z.coerce.number().default(12),
+  // S3/MinIO configuration
+  S3_ENDPOINT: z.string().default("http://localhost:9000"),
+  S3_REGION: z.string().default("us-east-1"),
+  S3_ACCESS_KEY: z.string().default("minioadmin"),
+  S3_SECRET_KEY: z.string().default("minioadmin"),
+  S3_BUCKET: z.string().default("agentops-outputs"),
 });
 
 export type Env = z.infer<typeof envSchema>;
