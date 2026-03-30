@@ -14,7 +14,9 @@ import {
 export async function loginAction(formData: FormData) {
   const email = formData.get("email") as string;
   const password = formData.get("password") as string;
-  const from = (formData.get("from") as string) || "/";
+  const rawFrom = (formData.get("from") as string) || "/";
+  // Validate that redirect target is a relative path to prevent open redirect
+  const from = rawFrom.startsWith("/") && !rawFrom.startsWith("//") ? rawFrom : "/";
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
