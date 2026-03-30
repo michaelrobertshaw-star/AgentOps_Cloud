@@ -138,6 +138,27 @@ export async function registerCompanyAndUser(input: {
   return { company, user };
 }
 
+// MFA pending token (short-lived, allows only MFA challenge)
+export async function issueMfaPendingToken(userId: string, companyId: string): Promise<string> {
+  const env = getEnv();
+  return new SignJWT({ company_id: companyId, mfa_pending: true } as unknown as JWTPayload)
+    .setProtectedHeader({ alg: "HS256" })
+    .setSubject(`user:${userId}`)
+    .setIssuer(env.JWT_ISSUER)
+    .setExpirationTime("5m")
+    .sign(getSecret());
+}
+
+export async function verifyMfaPendingToken(
+  token: string,
+): Promise<{ userId: string; companyId: string }> {
+  const env = getEnv();
+  const { payload } = await jwtVerify(token, getSecret(), { issuer: env.JWT_ISSUER });
+  const p = payload as unknown as { sub: string; company_id: string; mfa_pending: boolean };
+  if (!p.mfa_pending) throw new UnauthorizedError("Not an MFA pending token");
+  return { userId: p.sub.replace("user:", ""), companyId: p.company_id };
+}
+
 // Login
 export async function login(email: string, password: string) {
   const db = getDb();
@@ -158,6 +179,22 @@ export async function login(email: string, password: string) {
   if (!valid) {
     throw new UnauthorizedError("Invalid email or password");
   }
+
+  // If MFA is enabled, return a pending token instead of a full session
+  if (user.mfaEnabled) {
+    const mfaToken = await issueMfaPendingToken(user.id, user.companyId);
+    return {
+      mfaRequired: true as const,
+      mfaToken,
+      user: { id: user.id, email: user.email, name: user.name, role: user.role },
+    };
+  }
+
+  return loginComplete(user);
+}
+
+async function loginComplete(user: { id: string; companyId: string; email: string; name: string; role: string }) {
+  const db = getDb();
 
   // Get department roles
   const memberships = await db.query.departmentMemberships.findMany({
@@ -180,7 +217,8 @@ export async function login(email: string, password: string) {
   // Create session
   const tokenHash = crypto.createHash("sha256").update(tokenId).digest("hex");
   const env = getEnv();
-  await db.insert(sessions).values({
+  const dbInstance = db;
+  await dbInstance.insert(sessions).values({
     companyId: user.companyId,
     userId: user.id,
     tokenHash,
@@ -188,13 +226,39 @@ export async function login(email: string, password: string) {
   });
 
   // Update last login
-  await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
+  await dbInstance.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
 
   return {
+    mfaRequired: false as const,
     user: { id: user.id, email: user.email, name: user.name, role: user.role },
     accessToken,
     refreshToken,
   };
+}
+
+// Complete MFA challenge during login
+export async function loginMfaChallenge(mfaToken: string, code: string) {
+  const { userId, companyId } = await verifyMfaPendingToken(mfaToken).catch(() => {
+    throw new UnauthorizedError("Invalid or expired MFA token");
+  });
+
+  const db = getDb();
+  const user = await db.query.users.findFirst({ where: eq(users.id, userId) });
+  if (!user || user.status !== "active") {
+    throw new UnauthorizedError("Account is not active");
+  }
+
+  // Validate TOTP
+  const { validateMfaCode } = await import("./mfaService.js");
+  await validateMfaCode(userId, code);
+
+  return loginComplete({
+    id: user.id,
+    companyId: user.companyId,
+    email: user.email,
+    name: user.name,
+    role: user.role,
+  });
 }
 
 // Refresh token

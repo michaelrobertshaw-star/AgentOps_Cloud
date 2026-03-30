@@ -27,6 +27,9 @@ const envSchema = z.object({
   S3_AUDIT_BUCKET: z.string().default("audit-archive"),
   // File upload limits
   MAX_FILE_SIZE_BYTES: z.coerce.number().default(100 * 1024 * 1024), // 100MB
+  // MFA
+  MFA_ENCRYPTION_KEY: z.string().default("dev-mfa-encryption-key-32-bytes!!"), // 32 bytes for AES-256
+  MFA_ISSUER: z.string().default("AgentOps Cloud"),
 });
 
 export type Env = z.infer<typeof envSchema>;

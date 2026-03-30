@@ -1,0 +1,1 @@
+{"node":{"0a5582db8471ce10235c9061e8e5571777c1f214":{"workers":{"app/(auth)/login/page":"4130"},"layer":{"app/(auth)/login/page":"rsc"}},"708f1ae07fd75bea8d283ad8eb7006b47048f97c":{"workers":{"app/(dashboard)/page":"4095"},"layer":{"app/(dashboard)/page":"rsc"}}},"edge":{},"encryptionKey":"7WmW7tbedmb+kOOSo5cGLZ2voFNvl2ZwunQakdNrc04="}

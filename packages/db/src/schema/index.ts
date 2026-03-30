@@ -524,6 +524,30 @@ export const auditLogs = pgTable(
 );
 
 // ================================================================
+// MFA RECOVERY CODES
+// ================================================================
+
+export const mfaRecoveryCodes = pgTable(
+  "mfa_recovery_codes",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    codeHash: varchar("code_hash", { length: 64 }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_mfa_recovery_user").on(table.userId),
+    index("idx_mfa_recovery_company").on(table.companyId),
+  ],
+);
+
+// ================================================================
 // SESSIONS
 // ================================================================
 

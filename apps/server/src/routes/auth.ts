@@ -1,7 +1,9 @@
 import { Router } from "express";
 import { z } from "zod";
 import { validate } from "../middleware/validate.js";
+import { authenticate } from "../middleware/auth.js";
 import * as authService from "../services/authService.js";
+import * as mfaService from "../services/mfaService.js";
 
 const registerSchema = z.object({
   companyName: z
@@ -22,6 +24,19 @@ const loginSchema = z.object({
 
 const refreshSchema = z.object({
   refreshToken: z.string().min(1),
+});
+
+const mfaVerifySchema = z.object({
+  code: z.string().length(6).regex(/^\d{6}$/, "TOTP code must be 6 digits"),
+});
+
+const mfaRecoverSchema = z.object({
+  recoveryCode: z.string().min(1),
+});
+
+const mfaChallengeSchema = z.object({
+  mfaToken: z.string().min(1),
+  code: z.string().length(6).regex(/^\d{6}$/, "TOTP code must be 6 digits"),
 });
 
 export function authRoutes() {
@@ -78,6 +93,46 @@ export function authRoutes() {
         await authService.logout(refreshToken);
       }
       res.json({ message: "Logged out" });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // POST /auth/mfa/challenge — complete login when MFA is required
+  router.post("/mfa/challenge", validate(mfaChallengeSchema), async (req, res, next) => {
+    try {
+      const result = await authService.loginMfaChallenge(req.body.mfaToken, req.body.code);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // POST /auth/mfa/enroll — generate TOTP secret + QR URI (requires authentication)
+  router.post("/mfa/enroll", authenticate(), async (req, res, next) => {
+    try {
+      const result = await mfaService.enrollMfa(req.userId!, req.companyId!);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // POST /auth/mfa/verify — validate TOTP code and activate MFA (requires authentication)
+  router.post("/mfa/verify", authenticate(), validate(mfaVerifySchema), async (req, res, next) => {
+    try {
+      await mfaService.verifyMfaEnrollment(req.userId!, req.body.code);
+      res.json({ message: "MFA activated successfully" });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // POST /auth/mfa/recover — use a recovery code to disable MFA (requires authentication)
+  router.post("/mfa/recover", authenticate(), validate(mfaRecoverSchema), async (req, res, next) => {
+    try {
+      await mfaService.recoverMfa(req.userId!, req.companyId!, req.body.recoveryCode);
+      res.json({ message: "MFA disabled via recovery code" });
     } catch (err) {
       next(err);
     }
