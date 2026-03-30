@@ -30,6 +30,10 @@ const envSchema = z.object({
   // MFA
   MFA_ENCRYPTION_KEY: z.string().default("dev-mfa-encryption-key-32-bytes!!"), // 32 bytes for AES-256
   MFA_ISSUER: z.string().default("AgentOps Cloud"),
+  // JWT key rotation — optional secondary secret for dual-key verification during rollover
+  JWT_SECRET_SECONDARY: z.string().optional(),
+  // API key grace period for rotation (hours)
+  KEY_ROTATION_GRACE_HOURS: z.coerce.number().default(24),
 });
 
 export type Env = z.infer<typeof envSchema>;

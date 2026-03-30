@@ -282,6 +282,7 @@ export const agentApiKeys = pgTable(
     name: varchar("name", { length: 100 }).default("default").notNull(),
     status: apiKeyStatusEnum("status").default("active").notNull(),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
+    validUntil: timestamp("valid_until", { withTimezone: true }), // grace period end for rotated keys
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),

@@ -1,12 +1,13 @@
 import { Router } from "express";
 import { z } from "zod";
 import crypto from "node:crypto";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { agents, agentApiKeys } from "@agentops/db";
 import { authenticate } from "../middleware/auth.js";
 import { requirePermission } from "../middleware/rbac.js";
 import { validate } from "../middleware/validate.js";
 import { getDb } from "../lib/db.js";
+import { getEnv } from "../config/env.js";
 import { NotFoundError, ConflictError } from "../lib/errors.js";
 
 const createKeySchema = z.object({
@@ -161,7 +162,7 @@ export function agentKeyRoutes() {
     },
   );
 
-  // POST /agents/:agentId/keys/:keyId/rotate — revoke old key and issue new one
+  // POST /agents/:agentId/keys/:keyId/rotate — rotate a specific key with grace period
   router.post(
     "/:keyId/rotate",
     authenticate(),
@@ -171,6 +172,7 @@ export function agentKeyRoutes() {
         const db = getDb();
         const agentId = req.params.agentId as string;
         const keyId = req.params.keyId as string;
+        const gracePeriodHours = req.body?.gracePeriodHours ?? getEnv().KEY_ROTATION_GRACE_HOURS;
 
         const oldKey = await db.query.agentApiKeys.findFirst({
           where: and(
@@ -186,10 +188,11 @@ export function agentKeyRoutes() {
           throw new ConflictError("Can only rotate active keys");
         }
 
-        // Revoke old key
+        // Mark old key as revoked but set valid_until for grace period (zero-downtime)
+        const validUntil = new Date(Date.now() + gracePeriodHours * 60 * 60 * 1000);
         await db
           .update(agentApiKeys)
-          .set({ status: "revoked", revokedAt: new Date() })
+          .set({ status: "revoked", revokedAt: new Date(), validUntil })
           .where(eq(agentApiKeys.id, keyId));
 
         // Create new key
@@ -210,12 +213,143 @@ export function agentKeyRoutes() {
           action: "apikey:rotate",
           resourceType: "agent_api_key",
           resourceId: newKey.id,
-          changes: { before: { keyId: oldKey.id }, after: { keyId: newKey.id } },
+          changes: {
+            before: { keyId: oldKey.id },
+            after: { keyId: newKey.id, gracePeriodEnds: validUntil },
+          },
           riskLevel: "high",
         });
 
         const { keyHash, ...safeKey } = newKey;
-        res.status(201).json({ ...safeKey, key: raw, revokedKeyId: oldKey.id });
+        res.status(201).json({
+          ...safeKey,
+          key: raw,
+          revokedKeyId: oldKey.id,
+          gracePeriodEnds: validUntil,
+        });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // POST /agents/:agentId/keys/rotate — rotate the primary (default) key for an agent
+  router.post(
+    "/rotate",
+    authenticate(),
+    requirePermission("apikey:manage"),
+    async (req, res, next) => {
+      try {
+        const db = getDb();
+        const agentId = req.params.agentId as string;
+        const gracePeriodHours = req.body?.gracePeriodHours ?? getEnv().KEY_ROTATION_GRACE_HOURS;
+
+        const agent = await db.query.agents.findFirst({
+          where: and(eq(agents.id, agentId), eq(agents.companyId, req.companyId!)),
+        });
+        if (!agent) throw new NotFoundError("Agent", agentId);
+
+        // Find active keys for this agent
+        const activeKeys = await db.query.agentApiKeys.findMany({
+          where: and(
+            eq(agentApiKeys.agentId, agentId),
+            eq(agentApiKeys.companyId, req.companyId!),
+            eq(agentApiKeys.status, "active"),
+          ),
+        });
+
+        if (activeKeys.length === 0) {
+          throw new ConflictError("Agent has no active API keys to rotate");
+        }
+
+        const validUntil = new Date(Date.now() + gracePeriodHours * 60 * 60 * 1000);
+
+        // Grace-period all active keys
+        const oldKeyIds = activeKeys.map((k) => k.id);
+        await db
+          .update(agentApiKeys)
+          .set({ status: "revoked", revokedAt: new Date(), validUntil })
+          .where(inArray(agentApiKeys.id, oldKeyIds));
+
+        // Issue one new key
+        const { raw, hash, prefix } = generateApiKey();
+        const [newKey] = await db
+          .insert(agentApiKeys)
+          .values({
+            companyId: req.companyId!,
+            agentId,
+            keyHash: hash,
+            keyPrefix: prefix,
+            name: activeKeys[0]?.name ?? "default",
+          })
+          .returning();
+
+        await req.audit?.({
+          action: "apikey:rotate",
+          resourceType: "agent_api_key",
+          resourceId: newKey.id,
+          changes: {
+            before: { rotatedKeyCount: oldKeyIds.length },
+            after: { keyId: newKey.id, gracePeriodEnds: validUntil },
+          },
+          riskLevel: "high",
+        });
+
+        const { keyHash, ...safeKey } = newKey;
+        res.status(201).json({
+          ...safeKey,
+          key: raw,
+          rotatedKeyIds: oldKeyIds,
+          gracePeriodEnds: validUntil,
+        });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // POST /agents/:agentId/keys/force-revoke-all — immediately revoke ALL active keys (admin)
+  router.post(
+    "/force-revoke-all",
+    authenticate(),
+    requirePermission("apikey:manage"),
+    async (req, res, next) => {
+      try {
+        const db = getDb();
+        const agentId = req.params.agentId as string;
+
+        const agent = await db.query.agents.findFirst({
+          where: and(eq(agents.id, agentId), eq(agents.companyId, req.companyId!)),
+        });
+        if (!agent) throw new NotFoundError("Agent", agentId);
+
+        const activeKeys = await db.query.agentApiKeys.findMany({
+          where: and(
+            eq(agentApiKeys.agentId, agentId),
+            eq(agentApiKeys.companyId, req.companyId!),
+            eq(agentApiKeys.status, "active"),
+          ),
+        });
+
+        if (activeKeys.length === 0) {
+          return res.json({ message: "No active keys to revoke", revokedCount: 0 });
+        }
+
+        const keyIds = activeKeys.map((k) => k.id);
+        await db
+          .update(agentApiKeys)
+          .set({ status: "revoked", revokedAt: new Date() })
+          .where(inArray(agentApiKeys.id, keyIds));
+
+        await req.audit?.({
+          action: "apikey:force-revoke-all",
+          resourceType: "agent",
+          resourceId: agentId,
+          changes: { before: { activeKeyCount: keyIds.length }, after: { activeKeyCount: 0 } },
+          riskLevel: "critical",
+        });
+
+        res.json({ message: "All active API keys revoked", revokedCount: keyIds.length, revokedKeyIds: keyIds });
       } catch (err) {
         next(err);
       }

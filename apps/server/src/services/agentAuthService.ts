@@ -21,8 +21,15 @@ function getSecret(): Uint8Array {
   return new TextEncoder().encode(getEnv().JWT_SECRET);
 }
 
+function getSecondarySecret(): Uint8Array | null {
+  const secondary = getEnv().JWT_SECRET_SECONDARY;
+  if (!secondary) return null;
+  return new TextEncoder().encode(secondary);
+}
+
 /**
  * Verify a raw API key against stored hashes and return the matching agent.
+ * Supports rotated keys still within their grace period (valid_until).
  */
 export async function authenticateAgent(rawApiKey: string) {
   const db = getDb();
@@ -35,6 +42,24 @@ export async function authenticateAgent(rawApiKey: string) {
   });
 
   if (!apiKey) {
+    // Check if this is a recently-rotated key still within its grace period
+    const gracePeriodKey = await db.query.agentApiKeys.findFirst({
+      where: and(eq(agentApiKeys.keyHash, keyHash), eq(agentApiKeys.status, "revoked")),
+    });
+    if (gracePeriodKey?.validUntil && gracePeriodKey.validUntil > new Date()) {
+      // Allow access during grace period — treat as if still active for auth purposes
+      const agent = await db.query.agents.findFirst({
+        where: eq(agents.id, gracePeriodKey.agentId),
+      });
+      if (!agent || !["active", "testing", "degraded"].includes(agent.status)) {
+        throw new UnauthorizedError("Agent is not active");
+      }
+      await db
+        .update(agentApiKeys)
+        .set({ lastUsedAt: new Date() })
+        .where(eq(agentApiKeys.id, gracePeriodKey.id));
+      return { agent, apiKey: gracePeriodKey };
+    }
     throw new UnauthorizedError("Invalid or revoked API key");
   }
 
@@ -95,12 +120,22 @@ export async function issueAgentRunToken(
 
 /**
  * Verify an agent run token.
+ * Supports dual-key verification during JWT signing key rotation:
+ * tries the primary key first, falls back to secondary if set.
  */
 export async function verifyAgentRunToken(token: string): Promise<AgentRunToken> {
   const env = getEnv();
-  const { payload } = await jwtVerify(token, getSecret(), {
-    issuer: env.JWT_ISSUER,
-    audience: env.JWT_AUDIENCE,
-  });
-  return payload as unknown as AgentRunToken;
+  const verifyOpts = { issuer: env.JWT_ISSUER, audience: env.JWT_AUDIENCE };
+
+  try {
+    const { payload } = await jwtVerify(token, getSecret(), verifyOpts);
+    return payload as unknown as AgentRunToken;
+  } catch (primaryErr) {
+    const secondary = getSecondarySecret();
+    if (!secondary) throw primaryErr;
+
+    // Fallback to secondary secret (rollover window)
+    const { payload } = await jwtVerify(token, secondary, verifyOpts);
+    return payload as unknown as AgentRunToken;
+  }
 }
