@@ -34,6 +34,9 @@ const envSchema = z.object({
   JWT_SECRET_SECONDARY: z.string().optional(),
   // API key grace period for rotation (hours)
   KEY_ROTATION_GRACE_HOURS: z.coerce.number().default(24),
+  // Session management
+  SESSION_MAX_CONCURRENT: z.coerce.number().default(5),
+  SESSION_IDLE_TIMEOUT_HOURS: z.coerce.number().default(24),
 });
 
 export type Env = z.infer<typeof envSchema>;

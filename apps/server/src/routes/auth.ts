@@ -48,7 +48,10 @@ export function authRoutes() {
       const { company } = await authService.registerCompanyAndUser(req.body);
 
       // Auto-login after registration
-      const loginResult = await authService.login(req.body.email, req.body.password);
+      const loginResult = await authService.login(req.body.email, req.body.password, {
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"],
+      });
 
       res.status(201).json({
         company: {
@@ -68,7 +71,10 @@ export function authRoutes() {
   // POST /auth/login
   router.post("/login", validate(loginSchema), async (req, res, next) => {
     try {
-      const result = await authService.login(req.body.email, req.body.password);
+      const result = await authService.login(req.body.email, req.body.password, {
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"],
+      });
       res.json(result);
     } catch (err) {
       next(err);
@@ -101,7 +107,10 @@ export function authRoutes() {
   // POST /auth/mfa/challenge — complete login when MFA is required
   router.post("/mfa/challenge", validate(mfaChallengeSchema), async (req, res, next) => {
     try {
-      const result = await authService.loginMfaChallenge(req.body.mfaToken, req.body.code);
+      const result = await authService.loginMfaChallenge(req.body.mfaToken, req.body.code, {
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"],
+      });
       res.json(result);
     } catch (err) {
       next(err);

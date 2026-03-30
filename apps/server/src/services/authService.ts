@@ -7,6 +7,12 @@ import type { UserRole, DepartmentRole, JwtPayload } from "@agentops/shared";
 import { getEnv } from "../config/env.js";
 import { getDb } from "../lib/db.js";
 import { UnauthorizedError, ConflictError, ValidationError } from "../lib/errors.js";
+import {
+  createSessionInRedis,
+  enforceSessionLimit,
+  touchSessionRedis,
+  removeSessionFromRedis,
+} from "./sessionService.js";
 
 function getSecret(): Uint8Array {
   return new TextEncoder().encode(getEnv().JWT_SECRET);
@@ -160,7 +166,11 @@ export async function verifyMfaPendingToken(
 }
 
 // Login
-export async function login(email: string, password: string) {
+export async function login(
+  email: string,
+  password: string,
+  context?: { ipAddress?: string; userAgent?: string },
+) {
   const db = getDb();
 
   const user = await db.query.users.findFirst({
@@ -190,10 +200,13 @@ export async function login(email: string, password: string) {
     };
   }
 
-  return loginComplete(user);
+  return loginComplete(user, context);
 }
 
-async function loginComplete(user: { id: string; companyId: string; email: string; name: string; role: string }) {
+async function loginComplete(
+  user: { id: string; companyId: string; email: string; name: string; role: string },
+  context?: { ipAddress?: string; userAgent?: string },
+) {
   const db = getDb();
 
   // Get department roles
@@ -217,16 +230,24 @@ async function loginComplete(user: { id: string; companyId: string; email: strin
   // Create session
   const tokenHash = crypto.createHash("sha256").update(tokenId).digest("hex");
   const env = getEnv();
-  const dbInstance = db;
-  await dbInstance.insert(sessions).values({
-    companyId: user.companyId,
-    userId: user.id,
-    tokenHash,
-    expiresAt: new Date(Date.now() + env.JWT_REFRESH_TOKEN_TTL * 1000),
-  });
+  const [newSession] = await db
+    .insert(sessions)
+    .values({
+      companyId: user.companyId,
+      userId: user.id,
+      tokenHash,
+      ipAddress: context?.ipAddress,
+      userAgent: context?.userAgent,
+      expiresAt: new Date(Date.now() + env.JWT_REFRESH_TOKEN_TTL * 1000),
+    })
+    .returning({ id: sessions.id });
+
+  // Register in Redis and evict oldest sessions if over limit
+  await createSessionInRedis(newSession.id);
+  await enforceSessionLimit(user.id);
 
   // Update last login
-  await dbInstance.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
+  await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
 
   return {
     mfaRequired: false as const,
@@ -237,7 +258,11 @@ async function loginComplete(user: { id: string; companyId: string; email: strin
 }
 
 // Complete MFA challenge during login
-export async function loginMfaChallenge(mfaToken: string, code: string) {
+export async function loginMfaChallenge(
+  mfaToken: string,
+  code: string,
+  context?: { ipAddress?: string; userAgent?: string },
+) {
   const { userId, companyId } = await verifyMfaPendingToken(mfaToken).catch(() => {
     throw new UnauthorizedError("Invalid or expired MFA token");
   });
@@ -252,13 +277,10 @@ export async function loginMfaChallenge(mfaToken: string, code: string) {
   const { validateMfaCode } = await import("./mfaService.js");
   await validateMfaCode(userId, code);
 
-  return loginComplete({
-    id: user.id,
-    companyId: user.companyId,
-    email: user.email,
-    name: user.name,
-    role: user.role,
-  });
+  return loginComplete(
+    { id: user.id, companyId: user.companyId, email: user.email, name: user.name, role: user.role },
+    context,
+  );
 }
 
 // Refresh token
@@ -304,11 +326,12 @@ export async function refreshAccessToken(refreshTokenStr: string) {
     departmentRoles,
   );
 
-  // Update session activity
+  // Update session activity in Postgres and Redis
   await db
     .update(sessions)
     .set({ lastActiveAt: new Date() })
     .where(eq(sessions.id, session.id));
+  await touchSessionRedis(session.id);
 
   return { accessToken };
 }
@@ -324,5 +347,15 @@ export async function logout(refreshTokenStr: string) {
 
   const tokenHash = crypto.createHash("sha256").update(payload.token_id).digest("hex");
   const db = getDb();
+
+  // Find session ID before deleting so we can clean up Redis
+  const session = await db.query.sessions.findFirst({
+    where: eq(sessions.tokenHash, tokenHash),
+  });
+
   await db.delete(sessions).where(eq(sessions.tokenHash, tokenHash));
+
+  if (session) {
+    await removeSessionFromRedis(session.id);
+  }
 }

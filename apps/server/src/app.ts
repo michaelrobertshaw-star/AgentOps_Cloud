@@ -12,6 +12,7 @@ import { taskRunRoutes } from "./routes/taskRuns.js";
 import { workspaceRoutes, workspaceDeptRoutes, workspaceFileRoutes } from "./routes/workspaces.js";
 import { incidentDeptRoutes, incidentRoutes } from "./routes/incidents.js";
 import { webhookCompanyRoutes, webhookRoutes } from "./routes/webhooks.js";
+import { sessionRoutes } from "./routes/sessions.js";
 import { requestId } from "./middleware/requestId.js";
 import { auditMiddleware } from "./middleware/audit.js";
 import { errorHandler } from "./middleware/errorHandler.js";
@@ -29,6 +30,7 @@ export function createApp() {
   // Public routes
   app.use("/api/health", healthRoutes());
   app.use("/api/auth", authRoutes());
+  app.use("/api/auth", sessionRoutes());
   app.use("/api/agent", agentCheckinRoutes());
 
   // Authenticated routes
