@@ -12,6 +12,7 @@ import {
   inet,
   uniqueIndex,
   index,
+  decimal,
 } from "drizzle-orm/pg-core";
 
 // ================================================================
@@ -629,3 +630,128 @@ export const webhookDeliveries = pgTable(
     index("idx_webhook_deliveries_company_time").on(table.companyId, table.deliveredAt),
   ],
 );
+
+// ================================================================
+// CONNECTORS (M6.3)
+// ================================================================
+
+export const connectorTypeEnum = pgEnum("connector_type", [
+  "claude_api",
+  "claude_browser",
+  "webhook",
+  "http_get",
+  "minio_storage",
+]);
+
+export const connectors = pgTable(
+  "connectors",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    type: connectorTypeEnum("type").notNull(),
+    name: varchar("name", { length: 100 }).notNull(),
+    description: text("description"),
+    // Non-secret config: model name, endpoint URL, bucket name, etc.
+    config: jsonb("config").default({}).notNull(),
+    // AES-256-GCM encrypted secrets: API keys, passwords, tokens.
+    // Format: { iv: "<hex>", tag: "<hex>", ciphertext: "<hex>" }
+    secretsEncrypted: jsonb("secrets_encrypted"),
+    isDefault: boolean("is_default").default(false).notNull(),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("idx_connectors_company_name").on(table.companyId, table.name),
+    index("idx_connectors_company").on(table.companyId),
+    index("idx_connectors_type").on(table.companyId, table.type),
+  ],
+);
+
+export const agentConnectors = pgTable(
+  "agent_connectors",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    agentId: uuid("agent_id")
+      .references(() => agents.id, { onDelete: "cascade" })
+      .notNull(),
+    connectorId: uuid("connector_id")
+      .references(() => connectors.id, { onDelete: "cascade" })
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("idx_agent_connectors_unique").on(table.agentId, table.connectorId),
+    index("idx_agent_connectors_agent").on(table.agentId),
+    index("idx_agent_connectors_connector").on(table.connectorId),
+    index("idx_agent_connectors_company").on(table.companyId),
+  ],
+);
+
+// ================================================================
+// AGENT RUNS (M6.4 — pre-declared here so schema is coherent)
+// ================================================================
+
+export const agentRunStatusEnum = pgEnum("agent_run_status", [
+  "running",
+  "completed",
+  "failed",
+  "timed_out",
+  "cancelled",
+]);
+
+export const agentRuns = pgTable(
+  "agent_runs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    agentId: uuid("agent_id")
+      .references(() => agents.id, { onDelete: "cascade" })
+      .notNull(),
+    // Optional link to a platform task
+    taskId: uuid("task_id").references(() => tasks.id, { onDelete: "set null" }),
+    status: agentRunStatusEnum("status").default("running").notNull(),
+    input: jsonb("input"),
+    output: text("output"),
+    model: varchar("model", { length: 100 }),
+    tokensInput: integer("tokens_input").default(0).notNull(),
+    tokensOutput: integer("tokens_output").default(0).notNull(),
+    costUsd: decimal("cost_usd", { precision: 12, scale: 6 }),
+    durationMs: integer("duration_ms"),
+    error: text("error"),
+    startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_agent_runs_agent").on(table.agentId),
+    index("idx_agent_runs_company_time").on(table.companyId, table.createdAt),
+    index("idx_agent_runs_status").on(table.companyId, table.status),
+  ],
+);
+
+// ================================================================
+// DRIZZLE RELATIONS (for query builder `with` syntax)
+// ================================================================
+
+import { relations } from "drizzle-orm";
+
+export const agentConnectorsRelations = relations(agentConnectors, ({ one }) => ({
+  connector: one(connectors, {
+    fields: [agentConnectors.connectorId],
+    references: [connectors.id],
+  }),
+  agent: one(agents, {
+    fields: [agentConnectors.agentId],
+    references: [agents.id],
+  }),
+}));

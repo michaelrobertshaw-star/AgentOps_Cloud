@@ -48,6 +48,13 @@ export type AuditRiskLevel = "critical" | "high" | "medium" | "low";
 
 export type WebhookStatus = "active" | "paused" | "failed";
 
+export type ConnectorType =
+  | "claude_api"
+  | "claude_browser"
+  | "webhook"
+  | "http_get"
+  | "minio_storage";
+
 // Permission types from ONE-3 security architecture
 export type Permission =
   | "company:manage"
@@ -73,7 +80,9 @@ export type Permission =
   | "audit:manage"
   | "apikey:manage"
   | "user:manage"
-  | "user:invite_dept";
+  | "user:invite_dept"
+  | "connector:manage"
+  | "connector:view";
 
 // Role → permission mapping (from ONE-3 permission matrix)
 export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
@@ -102,6 +111,8 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     "apikey:manage",
     "user:manage",
     "user:invite_dept",
+    "connector:manage",
+    "connector:view",
   ],
   technical_admin: [
     "company:view",
@@ -121,6 +132,8 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     "incident:view",
     "incident:manage",
     "apikey:manage",
+    "connector:manage",
+    "connector:view",
   ],
   auditor: [
     "company:view",
@@ -131,6 +144,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     "workspace:export",
     "incident:view",
     "audit:view",
+    "connector:view",
   ],
 };
 

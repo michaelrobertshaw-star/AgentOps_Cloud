@@ -14,6 +14,7 @@ import { workspaceRoutes, workspaceDeptRoutes, workspaceFileRoutes } from "./rou
 import { incidentDeptRoutes, incidentRoutes } from "./routes/incidents.js";
 import { webhookCompanyRoutes, webhookRoutes } from "./routes/webhooks.js";
 import { sessionRoutes } from "./routes/sessions.js";
+import { connectorRoutes, agentConnectorRoutes } from "./routes/connectors.js";
 import { requestId } from "./middleware/requestId.js";
 import { auditMiddleware } from "./middleware/audit.js";
 import { errorHandler } from "./middleware/errorHandler.js";
@@ -52,6 +53,8 @@ export function createApp() {
   app.use("/api/companies/:companyId/audit", auditArchiveCompanyRoutes());
   app.use("/api/companies/:companyId/webhooks", webhookCompanyRoutes());
   app.use("/api/webhooks", webhookRoutes());
+  app.use("/api/connectors", connectorRoutes());
+  app.use("/api/agents/:agentId/connectors", agentConnectorRoutes());
 
   // Error handler (must be last)
   app.use(errorHandler());
