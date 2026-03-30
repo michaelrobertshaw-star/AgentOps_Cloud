@@ -14,6 +14,20 @@ interface Agent {
   createdAt: string;
 }
 
+interface AgentUsageSummary {
+  runCount: number;
+  tokensInput: number;
+  tokensOutput: number;
+  costUsd: number;
+  avgDurationMs: number;
+}
+
+interface DailyPoint {
+  date: string;
+  runCount: number;
+  costUsd: number;
+}
+
 function AgentStatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
     draft: "bg-gray-100 text-gray-600",
@@ -34,12 +48,45 @@ function AgentStatusBadge({ status }: { status: string }) {
   );
 }
 
+/** Minimal SVG sparkline chart */
+function SparklineChart({ data, width = 400, height = 80 }: { data: DailyPoint[]; width?: number; height?: number }) {
+  if (data.length === 0) {
+    return <div className="h-20 flex items-center justify-center text-xs text-gray-300">No data</div>;
+  }
+  const maxCost = Math.max(...data.map((d) => d.costUsd), 0.0001);
+  const pts = data.map((d, i) => {
+    const x = (i / Math.max(data.length - 1, 1)) * (width - 20) + 10;
+    const y = height - 10 - ((d.costUsd / maxCost) * (height - 20));
+    return `${x},${y}`;
+  });
+  const polyline = pts.join(" ");
+  return (
+    <svg width="100%" viewBox={`0 0 ${width} ${height}`} className="overflow-visible">
+      <polyline points={polyline} fill="none" stroke="#6366f1" strokeWidth="2" strokeLinejoin="round" />
+      {data.map((d, i) => {
+        const [x, y] = pts[i].split(",").map(Number);
+        return (
+          <circle key={i} cx={x} cy={y} r="3" fill="#6366f1">
+            <title>{`${d.date}: $${d.costUsd.toFixed(4)} (${d.runCount} runs)`}</title>
+          </circle>
+        );
+      })}
+    </svg>
+  );
+}
+
 export function AgentDetailClient({ agentId }: { agentId: string }) {
   const [agent, setAgent] = useState<Agent | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"details" | "usage">("details");
+
+  // Usage state
+  const [usageSummary, setUsageSummary] = useState<AgentUsageSummary | null>(null);
+  const [dailyData, setDailyData] = useState<DailyPoint[]>([]);
+  const [usageLoading, setUsageLoading] = useState(false);
 
   const fetchAgent = useCallback(async () => {
     setLoading(true);
@@ -56,9 +103,60 @@ export function AgentDetailClient({ agentId }: { agentId: string }) {
     }
   }, [agentId]);
 
+  const fetchUsage = useCallback(async () => {
+    setUsageLoading(true);
+    try {
+      const monthStart = new Date();
+      monthStart.setDate(1);
+      const from = monthStart.toISOString().slice(0, 10);
+      const to = new Date().toISOString().slice(0, 10);
+      const params = new URLSearchParams({ from, to, agentId });
+
+      const [byAgentRes, dailyRes] = await Promise.all([
+        fetch(`/api/usage/by-agent?${params}`),
+        fetch(`/api/usage/daily?${params}`),
+      ]);
+
+      if (byAgentRes.ok) {
+        const rows = await byAgentRes.json() as Array<{
+          agentId: string;
+          runCount: number;
+          tokensInput: number;
+          tokensOutput: number;
+          costUsd: number;
+          avgDurationMs: number;
+        }>;
+        const row = rows.find((r) => r.agentId === agentId);
+        if (row) {
+          setUsageSummary({
+            runCount: row.runCount,
+            tokensInput: row.tokensInput,
+            tokensOutput: row.tokensOutput,
+            costUsd: row.costUsd,
+            avgDurationMs: row.avgDurationMs,
+          });
+        } else {
+          setUsageSummary({ runCount: 0, tokensInput: 0, tokensOutput: 0, costUsd: 0, avgDurationMs: 0 });
+        }
+      }
+
+      if (dailyRes.ok) {
+        setDailyData(await dailyRes.json());
+      }
+    } finally {
+      setUsageLoading(false);
+    }
+  }, [agentId]);
+
   useEffect(() => {
     fetchAgent();
   }, [fetchAgent]);
+
+  useEffect(() => {
+    if (activeTab === "usage") {
+      fetchUsage();
+    }
+  }, [activeTab, fetchUsage]);
 
   async function handleDeploy() {
     setActionLoading(true);
@@ -150,57 +248,134 @@ export function AgentDetailClient({ agentId }: { agentId: string }) {
         </div>
       )}
 
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 space-y-4">
-        <div className="grid grid-cols-2 gap-4 text-sm">
-          <div>
-            <p className="text-xs text-gray-400 uppercase tracking-wider">Type</p>
-            <p className="mt-0.5 font-medium text-gray-800">{agent.type}</p>
-          </div>
-          <div>
-            <p className="text-xs text-gray-400 uppercase tracking-wider">Version</p>
-            <p className="mt-0.5 font-medium text-gray-800">
-              {agent.version ?? <span className="text-gray-300">—</span>}
-            </p>
-          </div>
-          <div>
-            <p className="text-xs text-gray-400 uppercase tracking-wider">Status</p>
-            <div className="mt-1">
-              <AgentStatusBadge status={agent.status} />
+      {/* Tabs */}
+      <div className="flex gap-4 border-b border-gray-200 mb-4">
+        {(["details", "usage"] as const).map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            className={`pb-2 text-sm font-medium capitalize border-b-2 transition-colors ${
+              activeTab === tab
+                ? "border-brand-600 text-brand-700"
+                : "border-transparent text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            {tab}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === "details" && (
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 space-y-4">
+          <div className="grid grid-cols-2 gap-4 text-sm">
+            <div>
+              <p className="text-xs text-gray-400 uppercase tracking-wider">Type</p>
+              <p className="mt-0.5 font-medium text-gray-800">{agent.type}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-400 uppercase tracking-wider">Version</p>
+              <p className="mt-0.5 font-medium text-gray-800">
+                {agent.version ?? <span className="text-gray-300">—</span>}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-400 uppercase tracking-wider">Status</p>
+              <div className="mt-1">
+                <AgentStatusBadge status={agent.status} />
+              </div>
+            </div>
+            <div>
+              <p className="text-xs text-gray-400 uppercase tracking-wider">Created</p>
+              <p className="mt-0.5 font-medium text-gray-800">
+                {new Date(agent.createdAt).toLocaleString()}
+              </p>
             </div>
           </div>
-          <div>
-            <p className="text-xs text-gray-400 uppercase tracking-wider">Created</p>
-            <p className="mt-0.5 font-medium text-gray-800">
-              {new Date(agent.createdAt).toLocaleString()}
-            </p>
-          </div>
+
+          {agent.description && (
+            <div>
+              <p className="text-xs text-gray-400 uppercase tracking-wider">Description</p>
+              <p className="mt-0.5 text-sm text-gray-700">{agent.description}</p>
+            </div>
+          )}
+
+          {agent.deployedAt && (
+            <div>
+              <p className="text-xs text-gray-400 uppercase tracking-wider">Deployed At</p>
+              <p className="mt-0.5 text-sm font-medium text-gray-800">
+                {new Date(agent.deployedAt).toLocaleString()}
+              </p>
+            </div>
+          )}
+
+          {agent.lastHeartbeatAt && (
+            <div>
+              <p className="text-xs text-gray-400 uppercase tracking-wider">Last Heartbeat</p>
+              <p className="mt-0.5 text-sm font-medium text-gray-800">
+                {new Date(agent.lastHeartbeatAt).toLocaleString()}
+              </p>
+            </div>
+          )}
         </div>
+      )}
 
-        {agent.description && (
-          <div>
-            <p className="text-xs text-gray-400 uppercase tracking-wider">Description</p>
-            <p className="mt-0.5 text-sm text-gray-700">{agent.description}</p>
-          </div>
-        )}
+      {activeTab === "usage" && (
+        <div>
+          {usageLoading ? (
+            <div className="p-8 text-center text-gray-400 animate-pulse">Loading usage...</div>
+          ) : (
+            <>
+              {/* Summary cards */}
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+                  <p className="text-xs text-gray-500 uppercase tracking-wide">Cost to Date (this month)</p>
+                  <p className="text-2xl font-bold text-gray-900 mt-1">
+                    ${(usageSummary?.costUsd ?? 0).toFixed(4)}
+                  </p>
+                </div>
+                <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+                  <p className="text-xs text-gray-500 uppercase tracking-wide">Total Runs</p>
+                  <p className="text-2xl font-bold text-gray-900 mt-1">
+                    {(usageSummary?.runCount ?? 0).toLocaleString()}
+                  </p>
+                </div>
+                <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+                  <p className="text-xs text-gray-500 uppercase tracking-wide">Avg Cost per Run</p>
+                  <p className="text-2xl font-bold text-gray-900 mt-1">
+                    ${usageSummary && usageSummary.runCount > 0
+                      ? (usageSummary.costUsd / usageSummary.runCount).toFixed(4)
+                      : "0.0000"}
+                  </p>
+                </div>
+                <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+                  <p className="text-xs text-gray-500 uppercase tracking-wide">Avg Duration</p>
+                  <p className="text-2xl font-bold text-gray-900 mt-1">
+                    {usageSummary && usageSummary.avgDurationMs > 0
+                      ? `${(usageSummary.avgDurationMs / 1000).toFixed(1)}s`
+                      : "—"}
+                  </p>
+                </div>
+              </div>
 
-        {agent.deployedAt && (
-          <div>
-            <p className="text-xs text-gray-400 uppercase tracking-wider">Deployed At</p>
-            <p className="mt-0.5 text-sm font-medium text-gray-800">
-              {new Date(agent.deployedAt).toLocaleString()}
-            </p>
-          </div>
-        )}
-
-        {agent.lastHeartbeatAt && (
-          <div>
-            <p className="text-xs text-gray-400 uppercase tracking-wider">Last Heartbeat</p>
-            <p className="mt-0.5 text-sm font-medium text-gray-800">
-              {new Date(agent.lastHeartbeatAt).toLocaleString()}
-            </p>
-          </div>
-        )}
-      </div>
+              {/* Daily cost chart */}
+              <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+                <p className="text-sm font-semibold text-gray-700 mb-3">Daily Cost (this month)</p>
+                {dailyData.length > 0 ? (
+                  <>
+                    <SparklineChart data={dailyData} />
+                    <div className="flex justify-between text-xs text-gray-400 mt-1">
+                      <span>{dailyData[0]?.date}</span>
+                      <span>{dailyData[dailyData.length - 1]?.date}</span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="py-8 text-center text-sm text-gray-400">No runs this month</div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -8,7 +8,7 @@
 
 import { Router } from "express";
 import { eq, and, gte, lte, sql } from "drizzle-orm";
-import { agentRuns, agents, companies } from "@agentops/db";
+import { agentRuns, agents, companies, companySettings } from "@agentops/db";
 import { authenticate } from "../middleware/auth.js";
 import { requirePermission } from "../middleware/rbac.js";
 import { getDb } from "../lib/db.js";
@@ -56,11 +56,21 @@ export function usageRoutes() {
           .from(agentRuns)
           .where(and(...conditions));
 
+        // Load spend cap setting for this company
+        const capSetting = await db.query.companySettings.findFirst({
+          where: and(
+            eq(companySettings.companyId, companyId),
+            eq(companySettings.key, "spend_cap_usd"),
+          ),
+        });
+        const spendCapUsd = capSetting?.value ? parseFloat(String(capSetting.value)) : null;
+
         res.json({
           totalRuns: summary?.totalRuns ?? 0,
           totalTokensInput: summary?.totalTokensInput ?? 0,
           totalTokensOutput: summary?.totalTokensOutput ?? 0,
           totalCostUsd: parseFloat(summary?.totalCostUsd ?? "0"),
+          spendCapUsd: isNaN(spendCapUsd as number) ? null : spendCapUsd,
         });
       } catch (err) {
         next(err);
@@ -102,6 +112,47 @@ export function usageRoutes() {
         res.json(
           rows.map((r) => ({
             ...r,
+            costUsd: parseFloat(r.costUsd ?? "0"),
+          })),
+        );
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // GET /api/usage/daily — daily cost breakdown (for chart)
+  router.get(
+    "/daily",
+    authenticate(),
+    requirePermission("company:view"),
+    async (req, res, next) => {
+      try {
+        const db = getDb();
+        const { from, to } = parseDateRange(req);
+        const companyId = req.companyId!;
+        const agentId = req.query.agentId as string | undefined;
+
+        const conditions = [eq(agentRuns.companyId, companyId)];
+        if (from) conditions.push(gte(agentRuns.startedAt, from));
+        if (to) conditions.push(lte(agentRuns.startedAt, to));
+        if (agentId) conditions.push(eq(agentRuns.agentId, agentId));
+
+        const rows = await db
+          .select({
+            date: sql<string>`date_trunc('day', ${agentRuns.startedAt})::date::text`,
+            runCount: sql<number>`count(*)::int`,
+            costUsd: sql<string>`coalesce(sum(${agentRuns.costUsd}), 0)::text`,
+          })
+          .from(agentRuns)
+          .where(and(...conditions))
+          .groupBy(sql`date_trunc('day', ${agentRuns.startedAt})`)
+          .orderBy(sql`date_trunc('day', ${agentRuns.startedAt})`);
+
+        res.json(
+          rows.map((r) => ({
+            date: r.date,
+            runCount: r.runCount,
             costUsd: parseFloat(r.costUsd ?? "0"),
           })),
         );

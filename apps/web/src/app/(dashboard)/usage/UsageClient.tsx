@@ -7,6 +7,7 @@ interface Summary {
   totalTokensInput: number;
   totalTokensOutput: number;
   totalCostUsd: number;
+  spendCapUsd: number | null;
 }
 
 interface AgentUsage {
@@ -19,6 +20,68 @@ interface AgentUsage {
   avgDurationMs: number;
 }
 
+interface DailyPoint {
+  date: string;
+  runCount: number;
+  costUsd: number;
+}
+
+/** Minimal SVG line chart */
+function LineChart({ data, width = 600, height = 120 }: { data: DailyPoint[]; width?: number; height?: number }) {
+  if (data.length === 0) {
+    return <div className="h-28 flex items-center justify-center text-xs text-gray-300">No data in range</div>;
+  }
+  const padX = 12;
+  const padY = 10;
+  const chartW = width - padX * 2;
+  const chartH = height - padY * 2;
+  const maxCost = Math.max(...data.map((d) => d.costUsd), 0.0001);
+
+  const pts = data.map((d, i) => {
+    const x = padX + (i / Math.max(data.length - 1, 1)) * chartW;
+    const y = padY + chartH - (d.costUsd / maxCost) * chartH;
+    return { x, y, d };
+  });
+
+  const polyline = pts.map((p) => `${p.x},${p.y}`).join(" ");
+
+  // Fill area below line
+  const areaPoints = [
+    `${pts[0].x},${padY + chartH}`,
+    ...pts.map((p) => `${p.x},${p.y}`),
+    `${pts[pts.length - 1].x},${padY + chartH}`,
+  ].join(" ");
+
+  return (
+    <svg width="100%" viewBox={`0 0 ${width} ${height}`} className="overflow-visible">
+      <defs>
+        <linearGradient id="usageGrad" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0%" stopColor="#6366f1" stopOpacity="0.15" />
+          <stop offset="100%" stopColor="#6366f1" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      {/* Grid lines */}
+      {[0, 0.5, 1].map((frac) => {
+        const y = padY + frac * chartH;
+        return (
+          <line key={frac} x1={padX} x2={padX + chartW} y1={y} y2={y}
+            stroke="#e5e7eb" strokeWidth="1" strokeDasharray="4 4" />
+        );
+      })}
+      {/* Area fill */}
+      <polygon points={areaPoints} fill="url(#usageGrad)" />
+      {/* Line */}
+      <polyline points={polyline} fill="none" stroke="#6366f1" strokeWidth="2" strokeLinejoin="round" />
+      {/* Data points */}
+      {pts.map((p, i) => (
+        <circle key={i} cx={p.x} cy={p.y} r="3" fill="#6366f1">
+          <title>{`${p.d.date}: $${p.d.costUsd.toFixed(4)} (${p.d.runCount} runs)`}</title>
+        </circle>
+      ))}
+    </svg>
+  );
+}
+
 export function UsageClient() {
   const [from, setFrom] = useState(() => {
     const d = new Date();
@@ -28,6 +91,7 @@ export function UsageClient() {
   const [to, setTo] = useState(() => new Date().toISOString().slice(0, 10));
   const [summary, setSummary] = useState<Summary | null>(null);
   const [byAgent, setByAgent] = useState<AgentUsage[]>([]);
+  const [dailyData, setDailyData] = useState<DailyPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -36,13 +100,15 @@ export function UsageClient() {
     setError(null);
     try {
       const params = new URLSearchParams({ from, to });
-      const [summaryRes, agentRes] = await Promise.all([
+      const [summaryRes, agentRes, dailyRes] = await Promise.all([
         fetch(`/api/usage/summary?${params}`),
         fetch(`/api/usage/by-agent?${params}`),
+        fetch(`/api/usage/daily?${params}`),
       ]);
       if (!summaryRes.ok) throw new Error(`HTTP ${summaryRes.status}`);
       setSummary(await summaryRes.json());
       if (agentRes.ok) setByAgent(await agentRes.json());
+      if (dailyRes.ok) setDailyData(await dailyRes.json());
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load usage");
     } finally {
@@ -53,6 +119,39 @@ export function UsageClient() {
   useEffect(() => {
     fetchUsage();
   }, [fetchUsage]);
+
+  // Spend cap warning logic
+  const spendCapBanner = (() => {
+    if (!summary || !summary.spendCapUsd || summary.spendCapUsd <= 0) return null;
+    const pct = (summary.totalCostUsd / summary.spendCapUsd) * 100;
+    if (pct >= 100) {
+      return (
+        <div className="mb-4 rounded-lg bg-red-50 border border-red-300 px-4 py-3 flex items-center gap-3">
+          <span className="text-red-600 text-lg">⛔</span>
+          <div>
+            <p className="text-sm font-semibold text-red-700">Spend cap reached — new runs are blocked</p>
+            <p className="text-xs text-red-600">
+              ${summary.totalCostUsd.toFixed(2)} of ${summary.spendCapUsd.toFixed(2)} monthly cap used ({pct.toFixed(0)}%).
+            </p>
+          </div>
+        </div>
+      );
+    }
+    if (pct >= 80) {
+      return (
+        <div className="mb-4 rounded-lg bg-yellow-50 border border-yellow-300 px-4 py-3 flex items-center gap-3">
+          <span className="text-yellow-600 text-lg">⚠️</span>
+          <div>
+            <p className="text-sm font-semibold text-yellow-700">Approaching spend cap</p>
+            <p className="text-xs text-yellow-600">
+              ${summary.totalCostUsd.toFixed(2)} of ${summary.spendCapUsd.toFixed(2)} monthly cap used ({pct.toFixed(0)}%).
+            </p>
+          </div>
+        </div>
+      );
+    }
+    return null;
+  })();
 
   return (
     <div>
@@ -89,6 +188,9 @@ export function UsageClient() {
         <div className="mb-4 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{error}</div>
       )}
 
+      {/* Spend cap warning banner */}
+      {spendCapBanner}
+
       {/* Summary cards */}
       {summary && (
         <div className="grid grid-cols-4 gap-4 mb-6">
@@ -97,17 +199,54 @@ export function UsageClient() {
             <p className="text-2xl font-bold text-gray-900 mt-1">{summary.totalRuns.toLocaleString()}</p>
           </div>
           <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
-            <p className="text-xs text-gray-500 uppercase tracking-wide">Input Tokens</p>
-            <p className="text-2xl font-bold text-gray-900 mt-1">{summary.totalTokensInput.toLocaleString()}</p>
-          </div>
-          <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
-            <p className="text-xs text-gray-500 uppercase tracking-wide">Output Tokens</p>
-            <p className="text-2xl font-bold text-gray-900 mt-1">{summary.totalTokensOutput.toLocaleString()}</p>
+            <p className="text-xs text-gray-500 uppercase tracking-wide">Total Tokens</p>
+            <p className="text-2xl font-bold text-gray-900 mt-1">
+              {(summary.totalTokensInput + summary.totalTokensOutput).toLocaleString()}
+            </p>
+            <p className="text-xs text-gray-400 mt-0.5">
+              {summary.totalTokensInput.toLocaleString()} in / {summary.totalTokensOutput.toLocaleString()} out
+            </p>
           </div>
           <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
             <p className="text-xs text-gray-500 uppercase tracking-wide">Total Cost (USD)</p>
             <p className="text-2xl font-bold text-gray-900 mt-1">${summary.totalCostUsd.toFixed(4)}</p>
           </div>
+          <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+            <p className="text-xs text-gray-500 uppercase tracking-wide">Spend Cap</p>
+            <p className="text-2xl font-bold text-gray-900 mt-1">
+              {summary.spendCapUsd ? `$${summary.spendCapUsd.toFixed(2)}/mo` : "—"}
+            </p>
+            {summary.spendCapUsd && summary.spendCapUsd > 0 && (
+              <div className="mt-2">
+                <div className="w-full bg-gray-100 rounded-full h-1.5">
+                  <div
+                    className={`h-1.5 rounded-full ${
+                      summary.totalCostUsd / summary.spendCapUsd >= 1
+                        ? "bg-red-500"
+                        : summary.totalCostUsd / summary.spendCapUsd >= 0.8
+                        ? "bg-yellow-400"
+                        : "bg-brand-500"
+                    }`}
+                    style={{ width: `${Math.min((summary.totalCostUsd / summary.spendCapUsd) * 100, 100)}%` }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Cost over time chart */}
+      {!loading && (
+        <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm mb-6">
+          <h2 className="text-sm font-semibold text-gray-700 mb-3">Cost Over Time</h2>
+          <LineChart data={dailyData} />
+          {dailyData.length > 0 && (
+            <div className="flex justify-between text-xs text-gray-400 mt-1">
+              <span>{dailyData[0]?.date}</span>
+              <span>{dailyData[dailyData.length - 1]?.date}</span>
+            </div>
+          )}
         </div>
       )}
 

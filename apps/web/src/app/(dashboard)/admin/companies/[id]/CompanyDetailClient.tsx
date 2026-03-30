@@ -24,6 +24,24 @@ interface User {
   lastLoginAt: string | null;
 }
 
+interface AgentUsageRow {
+  agentId: string;
+  agentName: string | null;
+  runCount: number;
+  tokensInput: number;
+  tokensOutput: number;
+  costUsd: number;
+  avgDurationMs: number;
+}
+
+interface UsageSummary {
+  totalRuns: number;
+  totalTokensInput: number;
+  totalTokensOutput: number;
+  totalCostUsd: number;
+  spendCapUsd: number | null;
+}
+
 interface InviteForm {
   email: string;
   name: string;
@@ -38,11 +56,16 @@ export function CompanyDetailClient({ companyId }: { companyId: string }) {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"users" | "settings">("users");
+  const [activeTab, setActiveTab] = useState<"users" | "settings" | "usage">("users");
   const [showInvite, setShowInvite] = useState(false);
   const [invite, setInvite] = useState<InviteForm>(EMPTY_INVITE);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // Usage state
+  const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null);
+  const [agentUsage, setAgentUsage] = useState<AgentUsageRow[]>([]);
+  const [usageLoading, setUsageLoading] = useState(false);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -62,9 +85,36 @@ export function CompanyDetailClient({ companyId }: { companyId: string }) {
     }
   }, [companyId]);
 
+  const fetchUsage = useCallback(async () => {
+    setUsageLoading(true);
+    try {
+      const monthStart = new Date();
+      monthStart.setDate(1);
+      const from = monthStart.toISOString().slice(0, 10);
+      const to = new Date().toISOString().slice(0, 10);
+      const params = new URLSearchParams({ from, to });
+
+      const [summaryRes, byAgentRes] = await Promise.all([
+        fetch(`/api/usage/summary?${params}`),
+        fetch(`/api/usage/by-agent?${params}`),
+      ]);
+
+      if (summaryRes.ok) setUsageSummary(await summaryRes.json());
+      if (byAgentRes.ok) setAgentUsage(await byAgentRes.json());
+    } finally {
+      setUsageLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  useEffect(() => {
+    if (activeTab === "usage") {
+      fetchUsage();
+    }
+  }, [activeTab, fetchUsage]);
 
   async function handleInvite(e: React.FormEvent) {
     e.preventDefault();
@@ -150,7 +200,7 @@ export function CompanyDetailClient({ companyId }: { companyId: string }) {
 
       {/* Tabs */}
       <div className="flex gap-4 border-b border-gray-200 mb-4">
-        {(["users", "settings"] as const).map((tab) => (
+        {(["users", "usage", "settings"] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -211,6 +261,116 @@ export function CompanyDetailClient({ companyId }: { companyId: string }) {
                 </tbody>
               </table>
             </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === "usage" && (
+        <div>
+          {usageLoading ? (
+            <div className="p-8 text-center text-gray-400 animate-pulse">Loading usage...</div>
+          ) : (
+            <>
+              {/* Spend cap warning banner */}
+              {usageSummary && usageSummary.spendCapUsd && usageSummary.spendCapUsd > 0 && (() => {
+                const pct = (usageSummary.totalCostUsd / usageSummary.spendCapUsd!) * 100;
+                if (pct >= 100) {
+                  return (
+                    <div className="mb-4 rounded-lg bg-red-50 border border-red-300 px-4 py-3 flex items-center gap-3">
+                      <span className="text-red-600 text-lg">⛔</span>
+                      <div>
+                        <p className="text-sm font-semibold text-red-700">Spend cap reached</p>
+                        <p className="text-xs text-red-600">
+                          ${usageSummary.totalCostUsd.toFixed(2)} of ${usageSummary.spendCapUsd!.toFixed(2)} monthly cap used ({pct.toFixed(0)}%).
+                          New runs are blocked.
+                        </p>
+                      </div>
+                    </div>
+                  );
+                }
+                if (pct >= 80) {
+                  return (
+                    <div className="mb-4 rounded-lg bg-yellow-50 border border-yellow-300 px-4 py-3 flex items-center gap-3">
+                      <span className="text-yellow-600 text-lg">⚠️</span>
+                      <div>
+                        <p className="text-sm font-semibold text-yellow-700">Spend cap warning</p>
+                        <p className="text-xs text-yellow-600">
+                          ${usageSummary.totalCostUsd.toFixed(2)} of ${usageSummary.spendCapUsd!.toFixed(2)} monthly cap used ({pct.toFixed(0)}%).
+                        </p>
+                      </div>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
+
+              {/* Monthly spend vs cap */}
+              {usageSummary && (
+                <div className="grid grid-cols-2 gap-4 mb-4">
+                  <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+                    <p className="text-xs text-gray-500 uppercase tracking-wide">Monthly Spend</p>
+                    <p className="text-2xl font-bold text-gray-900 mt-1">${usageSummary.totalCostUsd.toFixed(4)}</p>
+                    {usageSummary.spendCapUsd && (
+                      <div className="mt-2">
+                        <div className="flex justify-between text-xs text-gray-400 mb-1">
+                          <span>of ${usageSummary.spendCapUsd.toFixed(2)} cap</span>
+                          <span>{((usageSummary.totalCostUsd / usageSummary.spendCapUsd) * 100).toFixed(0)}%</span>
+                        </div>
+                        <div className="w-full bg-gray-100 rounded-full h-1.5">
+                          <div
+                            className={`h-1.5 rounded-full ${
+                              (usageSummary.totalCostUsd / usageSummary.spendCapUsd) >= 1
+                                ? "bg-red-500"
+                                : (usageSummary.totalCostUsd / usageSummary.spendCapUsd) >= 0.8
+                                ? "bg-yellow-400"
+                                : "bg-brand-500"
+                            }`}
+                            style={{ width: `${Math.min((usageSummary.totalCostUsd / usageSummary.spendCapUsd) * 100, 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+                    <p className="text-xs text-gray-500 uppercase tracking-wide">Total Runs (this month)</p>
+                    <p className="text-2xl font-bold text-gray-900 mt-1">{usageSummary.totalRuns.toLocaleString()}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Per-agent breakdown */}
+              <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
+                <div className="px-4 py-3 border-b border-gray-100">
+                  <h3 className="text-sm font-semibold text-gray-700">Usage by Agent (this month)</h3>
+                </div>
+                {agentUsage.length === 0 ? (
+                  <div className="p-8 text-center text-gray-400 text-sm">No runs this month.</div>
+                ) : (
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-gray-50 border-b border-gray-200">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Agent</th>
+                        <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Runs</th>
+                        <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Input Tokens</th>
+                        <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Output Tokens</th>
+                        <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Cost (USD)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {agentUsage.map((row) => (
+                        <tr key={row.agentId} className="hover:bg-gray-50">
+                          <td className="px-4 py-3 font-medium text-gray-900">{row.agentName ?? row.agentId.slice(0, 8)}</td>
+                          <td className="px-4 py-3 text-right text-gray-600">{row.runCount.toLocaleString()}</td>
+                          <td className="px-4 py-3 text-right text-gray-600">{row.tokensInput.toLocaleString()}</td>
+                          <td className="px-4 py-3 text-right text-gray-600">{row.tokensOutput.toLocaleString()}</td>
+                          <td className="px-4 py-3 text-right font-mono text-gray-900">${row.costUsd.toFixed(4)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </>
           )}
         </div>
       )}
