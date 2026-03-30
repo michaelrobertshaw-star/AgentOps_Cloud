@@ -20,6 +20,8 @@ const envSchema = z.object({
   S3_ACCESS_KEY: z.string().default("minioadmin"),
   S3_SECRET_KEY: z.string().default("minioadmin"),
   S3_BUCKET: z.string().default("agentops-outputs"),
+  S3_WORKSPACE_BUCKET: z.string().default("workspaces"),
+  S3_AUDIT_BUCKET: z.string().default("audit-archive"),
 });
 
 export type Env = z.infer<typeof envSchema>;

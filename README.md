@@ -62,13 +62,43 @@ Copy `.env.example` to `.env` and adjust values:
 cp .env.example .env
 ```
 
-| Variable       | Default                                                  | Description              |
-| -------------- | -------------------------------------------------------- | ------------------------ |
-| `DATABASE_URL` | `postgresql://agentops:agentops@localhost:5432/agentops` | Postgres connection URL  |
-| `REDIS_URL`    | `redis://localhost:6379`                                 | Redis connection URL     |
-| `PORT`         | `4000`                                                   | API server port          |
-| `HOST`         | `0.0.0.0`                                                | API server bind host     |
-| `NODE_ENV`     | `development`                                            | Environment              |
+| Variable              | Default                                                  | Description                        |
+| --------------------- | -------------------------------------------------------- | ---------------------------------- |
+| `DATABASE_URL`        | `postgresql://agentops:agentops@localhost:5432/agentops` | Postgres connection URL             |
+| `REDIS_URL`           | `redis://localhost:6379`                                 | Redis connection URL                |
+| `PORT`                | `4000`                                                   | API server port                     |
+| `HOST`                | `0.0.0.0`                                                | API server bind host                |
+| `NODE_ENV`            | `development`                                            | Environment                         |
+| `S3_ENDPOINT`         | `http://localhost:9000`                                  | MinIO/S3 endpoint URL               |
+| `S3_REGION`           | `us-east-1`                                              | S3 region                           |
+| `S3_ACCESS_KEY`       | `minioadmin`                                             | MinIO root user / S3 access key     |
+| `S3_SECRET_KEY`       | `minioadmin`                                             | MinIO root password / S3 secret key |
+| `S3_BUCKET`           | `agentops-outputs`                                       | Bucket for task run outputs         |
+| `S3_WORKSPACE_BUCKET` | `workspaces`                                             | Bucket for workspace files          |
+| `S3_AUDIT_BUCKET`     | `audit-archive`                                          | Bucket for audit log archives       |
+
+## MinIO Local Dev
+
+MinIO is included in `docker-compose.yml` as an S3-compatible object store. After running `docker compose up -d`:
+
+- **API endpoint:** `http://localhost:9000`
+- **Web console:** `http://localhost:9001`
+- **Login:** `minioadmin` / `minioadmin`
+
+Three buckets are created automatically on first start:
+
+| Bucket             | Purpose                              |
+| ------------------ | ------------------------------------ |
+| `agentops-outputs` | Task run output artifacts            |
+| `workspaces`       | Workspace file storage               |
+| `audit-archive`    | Archived audit logs                  |
+
+To verify MinIO is healthy:
+
+```bash
+curl http://localhost:4000/api/health/minio
+# {"status":"ok","minio":{"healthy":true},"timestamp":"..."}
+```
 
 ## CI/CD
 

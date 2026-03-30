@@ -4,6 +4,7 @@ import {
   GetObjectCommand,
   DeleteObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
 import { getEnv } from "../config/env.js";
 import pino from "pino";
@@ -30,6 +31,14 @@ function getS3Client(): S3Client {
 
 function getBucket(): string {
   return getEnv().S3_BUCKET;
+}
+
+function getWorkspaceBucket(): string {
+  return getEnv().S3_WORKSPACE_BUCKET;
+}
+
+function getAuditBucket(): string {
+  return getEnv().S3_AUDIT_BUCKET;
 }
 
 /**
@@ -138,4 +147,132 @@ async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
     chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
   }
   return Buffer.concat(chunks);
+}
+
+/**
+ * Build the S3 key for a workspace file.
+ * Format: {workspaceId}/{filepath}
+ */
+export function buildWorkspaceFileKey(
+  workspaceId: string,
+  filepath: string,
+): string {
+  return `${workspaceId}/${filepath}`;
+}
+
+/**
+ * Upload a file to the workspace bucket.
+ */
+export async function uploadWorkspaceFile(
+  key: string,
+  body: Buffer | string,
+  contentType: string = "application/octet-stream",
+): Promise<string> {
+  const client = getS3Client();
+  const bucket = getWorkspaceBucket();
+
+  await client.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: typeof body === "string" ? Buffer.from(body) : body,
+      ContentType: contentType,
+    }),
+  );
+
+  const ref = `s3://${bucket}/${key}`;
+  logger.info({ key, bucket }, "Uploaded workspace file");
+  return ref;
+}
+
+/**
+ * Download a file from the workspace bucket.
+ */
+export async function downloadWorkspaceFile(key: string): Promise<{
+  body: Buffer;
+  contentType: string;
+}> {
+  const client = getS3Client();
+  const bucket = getWorkspaceBucket();
+
+  const response = await client.send(
+    new GetObjectCommand({
+      Bucket: bucket,
+      Key: key,
+    }),
+  );
+
+  const body = await streamToBuffer(response.Body as NodeJS.ReadableStream);
+  return {
+    body,
+    contentType: response.ContentType || "application/octet-stream",
+  };
+}
+
+/**
+ * Check if a workspace file exists.
+ */
+export async function workspaceFileExists(key: string): Promise<boolean> {
+  const client = getS3Client();
+  const bucket = getWorkspaceBucket();
+
+  try {
+    await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Delete a workspace file.
+ */
+export async function deleteWorkspaceFile(key: string): Promise<void> {
+  const client = getS3Client();
+  const bucket = getWorkspaceBucket();
+
+  await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+  logger.info({ key, bucket }, "Deleted workspace file");
+}
+
+/**
+ * List files in a workspace.
+ */
+export async function listWorkspaceFiles(
+  workspaceId: string,
+): Promise<string[]> {
+  const client = getS3Client();
+  const bucket = getWorkspaceBucket();
+  const prefix = `${workspaceId}/`;
+
+  const response = await client.send(
+    new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix }),
+  );
+
+  return (response.Contents ?? [])
+    .map((obj) => obj.Key ?? "")
+    .filter(Boolean)
+    .map((key) => key.slice(prefix.length));
+}
+
+/**
+ * Check MinIO connectivity by pinging the workspace bucket.
+ */
+export async function checkMinioHealth(): Promise<{
+  healthy: boolean;
+  error?: string;
+}> {
+  const client = getS3Client();
+  const bucket = getWorkspaceBucket();
+
+  try {
+    await client.send(
+      new ListObjectsV2Command({ Bucket: bucket, MaxKeys: 1 }),
+    );
+    return { healthy: true };
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    logger.warn({ error }, "MinIO health check failed");
+    return { healthy: false, error };
+  }
 }
