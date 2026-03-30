@@ -48,7 +48,11 @@ export function requirePermission(permission: Permission) {
     }
 
     // If no department context but user has department-level permissions,
-    // allow if they have the permission in ANY department
+    // allow if they have the permission in ANY department.
+    // NOTE: This fallback is intentional — resource-level routes (e.g. GET/PATCH /api/workspaces/:id)
+    // do not carry a departmentId in the URL. Cross-department isolation within a company is
+    // the responsibility of DB-layer queries (filtering by companyId and, where required, departmentId).
+    // A stricter per-dept DB filter is tracked as a future hardening item.
     if (!departmentId && department_roles) {
       for (const deptRole of Object.values(department_roles)) {
         const deptPerms = DEPARTMENT_ROLE_PERMISSIONS[deptRole];

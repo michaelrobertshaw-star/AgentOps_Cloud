@@ -280,9 +280,11 @@ async function createTestWsServer(): Promise<{
   return { wsUrl, server, cleanup };
 }
 
-function connectWs(url: string): Promise<WebSocket> {
+function connectWs(baseUrl: string, token?: string): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(url);
+    const ws = token
+      ? new WebSocket(baseUrl, { headers: { Authorization: `Bearer ${token}` } })
+      : new WebSocket(baseUrl);
     ws.once("open", () => resolve(ws));
     ws.once("error", reject);
   });
@@ -905,7 +907,7 @@ describe("M3 Scaffold: WebSocket real-time events (full flow pending M3 routes)"
 
     try {
       const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
-      const ws = await connectWs(`${wsUrl}?token=${token}`);
+      const ws = await connectWs(wsUrl, token);
 
       // Consume welcome
       await nextWsMessage(ws);
@@ -940,7 +942,7 @@ describe("M3 Scaffold: WebSocket real-time events (full flow pending M3 routes)"
 
     try {
       const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
-      const ws = await connectWs(`${wsUrl}?token=${token}`);
+      const ws = await connectWs(wsUrl, token);
 
       // Consume welcome
       await nextWsMessage(ws);
@@ -976,7 +978,7 @@ describe("M3 Scaffold: WebSocket real-time events (full flow pending M3 routes)"
 
     try {
       const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
-      const ws = await connectWs(`${wsUrl}?token=${token}`);
+      const ws = await connectWs(wsUrl, token);
 
       // Consume welcome
       await nextWsMessage(ws);

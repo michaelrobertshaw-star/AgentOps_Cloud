@@ -78,10 +78,13 @@ async function createTestServer(): Promise<{ wsUrl: string; server: http.Server;
 
 /**
  * Connect a WebSocket client and wait for it to open.
+ * Passes the token via Authorization header (never via URL query param).
  */
-function connectClient(url: string): Promise<WebSocket> {
+function connectClient(baseUrl: string, token?: string): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(url);
+    const ws = token
+      ? new WebSocket(baseUrl, { headers: { Authorization: `Bearer ${token}` } })
+      : new WebSocket(baseUrl);
     ws.once("open", () => resolve(ws));
     ws.once("error", reject);
   });
@@ -135,7 +138,7 @@ describe("WebSocket real-time event stream", () => {
     const { wsUrl, cleanup } = await createTestServer();
     try {
       const token = await issueAccessToken("user-1", "co-1", ["company_admin"], {});
-      const ws = await connectClient(`${wsUrl}?token=${token}`);
+      const ws = await connectClient(wsUrl, token);
 
       const welcome = await nextMessage(ws);
       expect(welcome.type).toBe("welcome");
@@ -164,7 +167,7 @@ describe("WebSocket real-time event stream", () => {
   it("rejects connection with invalid token with close code 4401", async () => {
     const { wsUrl, cleanup } = await createTestServer();
     try {
-      const ws = new WebSocket(`${wsUrl}?token=invalid.jwt.token`);
+      const ws = new WebSocket(wsUrl, { headers: { Authorization: "Bearer invalid.jwt.token" } });
       const code = await waitForClose(ws);
       expect(code).toBe(4401);
     } finally {
@@ -177,7 +180,7 @@ describe("WebSocket real-time event stream", () => {
     const { wsUrl, cleanup } = await createTestServer();
     try {
       const token = await issueAccessToken("user-1", "co-1", ["company_admin"], {});
-      const ws = await connectClient(`${wsUrl}?token=${token}`);
+      const ws = await connectClient(wsUrl, token);
 
       // Consume welcome
       await nextMessage(ws);
@@ -202,7 +205,7 @@ describe("WebSocket real-time event stream", () => {
 
     try {
       const token = await issueAccessToken("user-1", "co-1", ["company_admin"], {});
-      const ws = await connectClient(`${wsUrl}?token=${token}`);
+      const ws = await connectClient(wsUrl, token);
 
       // Consume welcome
       await nextMessage(ws);
@@ -238,7 +241,7 @@ describe("WebSocket real-time event stream", () => {
 
     try {
       const token = await issueAccessToken("user-1", "co-1", ["company_admin"], {});
-      const ws = await connectClient(`${wsUrl}?token=${token}`);
+      const ws = await connectClient(wsUrl, token);
 
       // Consume welcome
       await nextMessage(ws);
@@ -274,7 +277,7 @@ describe("WebSocket real-time event stream", () => {
     const { wsUrl, cleanup } = await createTestServer();
     try {
       const token = await issueAccessToken("user-1", "co-1", ["company_admin"], {});
-      const ws = await connectClient(`${wsUrl}?token=${token}`);
+      const ws = await connectClient(wsUrl, token);
 
       // Consume welcome
       await nextMessage(ws);

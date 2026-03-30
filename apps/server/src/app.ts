@@ -1,4 +1,5 @@
 import express from "express";
+import helmet from "helmet";
 import { healthRoutes } from "./routes/health.js";
 import { authRoutes } from "./routes/auth.js";
 import { companyRoutes } from "./routes/companies.js";
@@ -22,6 +23,7 @@ export function createApp() {
   const app = express();
 
   // Global middleware
+  app.use(helmet());
   app.use(express.json());
   app.use(requestId());
   app.use(rateLimitMiddleware());

@@ -85,22 +85,13 @@ export class WsService {
   // -------------------------------------------------------------------------
 
   private async handleConnection(ws: WebSocket, req: http.IncomingMessage): Promise<void> {
-    // Extract token from query param or Authorization header
+    // Extract token from Authorization header only — never from URL query params
+    // (tokens in URLs appear in access logs, browser history, and referrer headers)
     let token: string | undefined;
 
-    const rawUrl = req.url ?? "";
-    try {
-      const parsedUrl = new URL(rawUrl, "http://localhost");
-      token = parsedUrl.searchParams.get("token") ?? undefined;
-    } catch {
-      // ignore parse errors — fall through to header check
-    }
-
-    if (!token) {
-      const authHeader = req.headers["authorization"];
-      if (authHeader?.startsWith("Bearer ")) {
-        token = authHeader.slice(7);
-      }
+    const authHeader = req.headers["authorization"];
+    if (authHeader?.startsWith("Bearer ")) {
+      token = authHeader.slice(7);
     }
 
     if (!token) {

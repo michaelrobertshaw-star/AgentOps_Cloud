@@ -70,10 +70,10 @@ function connectWs(
 ): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     const addr = server.address() as { port: number };
-    const url = token
-      ? `ws://127.0.0.1:${addr.port}/ws?token=${encodeURIComponent(token)}`
-      : `ws://127.0.0.1:${addr.port}/ws`;
-    const ws = new WebSocket(url);
+    const url = `ws://127.0.0.1:${addr.port}/ws`;
+    const ws = token
+      ? new WebSocket(url, { headers: { Authorization: `Bearer ${token}` } })
+      : new WebSocket(url);
     ws.once("open", () => resolve(ws));
     ws.once("error", reject);
   });
