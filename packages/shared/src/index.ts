@@ -196,6 +196,7 @@ export interface JwtPayload {
   company_id: string;
   roles: UserRole[];
   department_roles: Record<string, DepartmentRole>;
+  super_admin?: boolean;
   iat: number;
   exp: number;
   iss: string;

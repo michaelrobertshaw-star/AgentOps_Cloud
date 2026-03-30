@@ -7,9 +7,12 @@ const NAV_ITEMS = [
   { href: "/dashboard", label: "Overview", icon: "⊞" },
   { href: "/departments", label: "Departments", icon: "⊟" },
   { href: "/agents", label: "Agents", icon: "◈" },
+  { href: "/skills", label: "Skills", icon: "⚙" },
   { href: "/tasks", label: "Tasks", icon: "◫" },
   { href: "/incidents", label: "Incidents", icon: "⚡" },
   { href: "/audit", label: "Audit Log", icon: "◧" },
+  { href: "/usage", label: "Usage", icon: "◑" },
+  { href: "/admin/companies", label: "Admin", icon: "⊛" },
 ];
 
 export function Sidebar() {

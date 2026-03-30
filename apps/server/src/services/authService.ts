@@ -33,12 +33,14 @@ export async function issueAccessToken(
   companyId: string,
   roles: UserRole[],
   departmentRoles: Record<string, DepartmentRole>,
+  superAdmin = false,
 ): Promise<string> {
   const env = getEnv();
   return new SignJWT({
     company_id: companyId,
     roles,
     department_roles: departmentRoles,
+    ...(superAdmin && { super_admin: true }),
   } as unknown as JWTPayload)
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(`user:${userId}`)
@@ -200,11 +202,11 @@ export async function login(
     };
   }
 
-  return loginComplete(user, context);
+  return loginComplete({ ...user, superAdmin: user.superAdmin }, context);
 }
 
 async function loginComplete(
-  user: { id: string; companyId: string; email: string; name: string; role: string },
+  user: { id: string; companyId: string; email: string; name: string; role: string; superAdmin?: boolean },
   context?: { ipAddress?: string; userAgent?: string },
 ) {
   const db = getDb();
@@ -224,6 +226,7 @@ async function loginComplete(
     user.companyId,
     [user.role] as UserRole[],
     departmentRoles,
+    user.superAdmin ?? false,
   );
   const { token: refreshToken, tokenId } = await issueRefreshToken(user.id, user.companyId);
 
@@ -324,6 +327,7 @@ export async function refreshAccessToken(refreshTokenStr: string) {
     user.companyId,
     [user.role] as UserRole[],
     departmentRoles,
+    user.superAdmin ?? false,
   );
 
   // Update session activity in Postgres and Redis
