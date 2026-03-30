@@ -41,9 +41,18 @@ importers:
       '@agentops/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      bcrypt:
+        specifier: ^6.0.0
+        version: 6.0.0
+      drizzle-orm:
+        specifier: ^0.38.0
+        version: 0.38.4(postgres@3.4.8)
       express:
         specifier: ^5.0.1
         version: 5.2.1
+      jose:
+        specifier: ^6.2.2
+        version: 6.2.2
       pino:
         specifier: ^9.6.0
         version: 9.14.0
@@ -54,6 +63,9 @@ importers:
         specifier: ^3.24.0
         version: 3.25.76
     devDependencies:
+      '@types/bcrypt':
+        specifier: ^6.0.0
+        version: 6.0.0
       '@types/express':
         specifier: ^5.0.0
         version: 5.0.6
@@ -710,6 +722,9 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@types/bcrypt@6.0.0':
+    resolution: {integrity: sha512-/oJGukuH3D2+D+3H4JWLaAsJ/ji86dhRidzZ/Od7H/i8g+aCmvkeCc6Ni/f9uxGLSQVCRZkX2/lqEFG2BvWtlQ==}
+
   '@types/body-parser@1.19.6':
     resolution: {integrity: sha512-HLFeCYgz89uk22N5Qg3dvGvsv46B8GLvKKo1zKG4NybA8U2DiEO3w9lqGg29t/tfLRJpJ6iQxnVw4OnB7MoM9g==}
 
@@ -896,6 +911,10 @@ packages:
   balanced-match@4.0.4:
     resolution: {integrity: sha512-BLrgEcRTwX2o6gGxGOCNyMvGSp35YofuYzw9h1IMTRmKqttAZZVU67bdb9Pr2vUHA8+j3i2tJfjO6C6+4myGTA==}
     engines: {node: 18 || 20 || >=22}
+
+  bcrypt@6.0.0:
+    resolution: {integrity: sha512-cU8v/EGSrnH+HnxV2z0J7/blxH8gq7Xh2JFT6Aroax7UohdmiJJlxApMxtKfuI7z68NvvVcmR78k2LbT6efhRg==}
+    engines: {node: '>= 18'}
 
   body-parser@2.2.2:
     resolution: {integrity: sha512-oP5VkATKlNwcgvxi0vM0p/D3n2C3EReYVX+DNYs5TjZFn/oQt2j+4sVJtSMr18pdRr8wjTcBl6LoV+FUwzPmNA==}
@@ -1400,6 +1419,9 @@ packages:
     resolution: {integrity: sha512-6B3tLtFqtQS4ekarvLVMZ+X+VlvQekbe4taUkf/rhVO3d/h0M2rfARm/pXLcPEsjjMsFgrFgSrhQIxcSVrBz8w==}
     engines: {node: '>=18'}
 
+  jose@6.2.2:
+    resolution: {integrity: sha512-d7kPDd34KO/YnzaDOlikGpOurfF0ByC2sEV4cANCtdqLlTfBlw2p14O/5d/zv40gJPbIQxfES3nSx1/oYNyuZQ==}
+
   joycon@3.1.1:
     resolution: {integrity: sha512-34wB/Y7MW7bzjKRjUKTa46I2Z7eV62Rkhva+KkopW7Qvv/OSWBqvkSY7vusOPrNuZcUG3tApvdVgNB8POj3SPw==}
     engines: {node: '>=10'}
@@ -1501,6 +1523,14 @@ packages:
   negotiator@1.0.0:
     resolution: {integrity: sha512-8Ofs/AUQh8MaEcrlq5xOX0CQ9ypTF5dl78mjlMNfOK08fzpgTHQRQPBxcPlEtIw0yRpws+Zo/3r+5WRby7u3Gg==}
     engines: {node: '>= 0.6'}
+
+  node-addon-api@8.7.0:
+    resolution: {integrity: sha512-9MdFxmkKaOYVTV+XVRG8ArDwwQ77XIgIPyKASB1k3JPq3M8fGQQQE3YpMOrKm6g//Ktx8ivZr8xo1Qmtqub+GA==}
+    engines: {node: ^18 || ^20 || >= 21}
+
+  node-gyp-build@4.8.4:
+    resolution: {integrity: sha512-LA4ZjwlnUblHVgq0oBF3Jl/6h/Nvs5fzBLwdEF4nuxnFdsfajde4WfxtJr3CaiH+F6ewcIB/q4jQ4UzPyid+CQ==}
+    hasBin: true
 
   object-inspect@1.13.4:
     resolution: {integrity: sha512-W67iLl4J2EXEGTbfeHCffrjDfitvLANg0UlX3wFUUSTx92KXRFegMHUVgSqE+wvhAbi4WqjGg9czysTV2Epbew==}
@@ -2300,6 +2330,10 @@ snapshots:
   '@rollup/rollup-win32-x64-msvc@4.60.0':
     optional: true
 
+  '@types/bcrypt@6.0.0':
+    dependencies:
+      '@types/node': 25.5.0
+
   '@types/body-parser@1.19.6':
     dependencies:
       '@types/connect': 3.4.38
@@ -2536,6 +2570,11 @@ snapshots:
   balanced-match@1.0.2: {}
 
   balanced-match@4.0.4: {}
+
+  bcrypt@6.0.0:
+    dependencies:
+      node-addon-api: 8.7.0
+      node-gyp-build: 4.8.4
 
   body-parser@2.2.2:
     dependencies:
@@ -3049,6 +3088,8 @@ snapshots:
 
   isexe@3.1.5: {}
 
+  jose@6.2.2: {}
+
   joycon@3.1.1: {}
 
   js-tokens@9.0.1: {}
@@ -3123,6 +3164,10 @@ snapshots:
   natural-compare@1.4.0: {}
 
   negotiator@1.0.0: {}
+
+  node-addon-api@8.7.0: {}
+
+  node-gyp-build@4.8.4: {}
 
   object-inspect@1.13.4: {}
 
