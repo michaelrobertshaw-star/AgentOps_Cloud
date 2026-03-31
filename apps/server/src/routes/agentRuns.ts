@@ -74,24 +74,45 @@ function calcCost(model: string, tokensIn: number, tokensOut: number): number {
 }
 
 // ================================================================
-// Build system prompt from agent skills
+// Build system prompt from agent identity + skills
 // ================================================================
 
 async function buildSystemPrompt(agentId: string, companyId: string): Promise<string> {
   const db = getDb();
+
+  // Load agent for identity info
+  const agent = await db.query.agents.findFirst({
+    where: and(eq(agents.id, agentId), eq(agents.companyId, companyId)),
+  });
+
   const assignments = await db.query.agentSkills.findMany({
     where: eq(agentSkills.agentId, agentId),
     with: { skill: true },
   });
 
   const parts: string[] = [];
+
+  // Agent identity header — always present so the model knows who it is
+  if (agent) {
+    const identityLines = [`You are ${agent.name}, an AI agent on the AgentOps Cloud platform.`];
+    if (agent.description) identityLines.push(agent.description);
+    parts.push(identityLines.join("\n\n"));
+  }
+
+  // Skill content — support multiple key conventions; skip silently if content is null/empty
   for (const { skill } of assignments) {
-    // Expect skill.content to carry { instructions: "..." } at minimum
-    const content = skill.content as Record<string, unknown>;
-    if (typeof content.instructions === "string" && content.instructions.trim()) {
-      parts.push(`## Skill: ${skill.name}\n\n${content.instructions.trim()}`);
-    } else if (typeof content.system === "string" && content.system.trim()) {
-      parts.push(`## Skill: ${skill.name}\n\n${content.system.trim()}`);
+    const content = skill.content as Record<string, unknown> | null;
+    if (!content) continue;
+
+    const text =
+      (typeof content.instructions === "string" && content.instructions.trim()) ||
+      (typeof content.system === "string" && content.system.trim()) ||
+      (typeof content.markdown === "string" && content.markdown.trim()) ||
+      (typeof content.text === "string" && content.text.trim()) ||
+      null;
+
+    if (text) {
+      parts.push(`## Skill: ${skill.name}\n\n${text}`);
     }
   }
 
