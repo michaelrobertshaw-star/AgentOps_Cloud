@@ -14,6 +14,13 @@ interface Agent {
   createdAt: string;
 }
 
+interface AgentSkill {
+  id: string;
+  name: string;
+  description: string | null;
+  urlKey: string;
+}
+
 interface AgentUsageSummary {
   runCount: number;
   tokensInput: number;
@@ -81,7 +88,15 @@ export function AgentDetailClient({ agentId }: { agentId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"details" | "usage">("details");
+  const [activeTab, setActiveTab] = useState<"details" | "usage" | "skills">("details");
+
+  // Skills state
+  const [assignedSkills, setAssignedSkills] = useState<AgentSkill[]>([]);
+  const [companySkills, setCompanySkills] = useState<AgentSkill[]>([]);
+  const [skillsLoading, setSkillsLoading] = useState(false);
+  const [skillsError, setSkillsError] = useState<string | null>(null);
+  const [selectedSkillId, setSelectedSkillId] = useState("");
+  const [skillActionLoading, setSkillActionLoading] = useState(false);
 
   // Usage state
   const [usageSummary, setUsageSummary] = useState<AgentUsageSummary | null>(null);
@@ -102,6 +117,65 @@ export function AgentDetailClient({ agentId }: { agentId: string }) {
       setLoading(false);
     }
   }, [agentId]);
+
+  const fetchSkills = useCallback(async () => {
+    setSkillsLoading(true);
+    setSkillsError(null);
+    try {
+      const [assignedRes, companyRes] = await Promise.all([
+        fetch(`/api/agents/${agentId}/skills`),
+        fetch(`/api/skills`),
+      ]);
+      if (assignedRes.ok) setAssignedSkills(await assignedRes.json());
+      if (companyRes.ok) setCompanySkills(await companyRes.json());
+    } catch (e) {
+      setSkillsError(e instanceof Error ? e.message : "Failed to load skills");
+    } finally {
+      setSkillsLoading(false);
+    }
+  }, [agentId]);
+
+  async function handleAddSkill() {
+    if (!selectedSkillId) return;
+    setSkillActionLoading(true);
+    setSkillsError(null);
+    try {
+      const res = await fetch(`/api/agents/${agentId}/skills`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ skillId: selectedSkillId }),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        throw new Error((b as { error?: string }).error ?? `HTTP ${res.status}`);
+      }
+      setSelectedSkillId("");
+      await fetchSkills();
+    } catch (e) {
+      setSkillsError(e instanceof Error ? e.message : "Failed to add skill");
+    } finally {
+      setSkillActionLoading(false);
+    }
+  }
+
+  async function handleRemoveSkill(skillId: string) {
+    setSkillActionLoading(true);
+    setSkillsError(null);
+    try {
+      const res = await fetch(`/api/agents/${agentId}/skills/${skillId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        throw new Error((b as { error?: string }).error ?? `HTTP ${res.status}`);
+      }
+      await fetchSkills();
+    } catch (e) {
+      setSkillsError(e instanceof Error ? e.message : "Failed to remove skill");
+    } finally {
+      setSkillActionLoading(false);
+    }
+  }
 
   const fetchUsage = useCallback(async () => {
     setUsageLoading(true);
@@ -153,10 +227,9 @@ export function AgentDetailClient({ agentId }: { agentId: string }) {
   }, [fetchAgent]);
 
   useEffect(() => {
-    if (activeTab === "usage") {
-      fetchUsage();
-    }
-  }, [activeTab, fetchUsage]);
+    if (activeTab === "usage") fetchUsage();
+    if (activeTab === "skills") fetchSkills();
+  }, [activeTab, fetchUsage, fetchSkills]);
 
   async function handleDeploy() {
     setActionLoading(true);
@@ -250,7 +323,7 @@ export function AgentDetailClient({ agentId }: { agentId: string }) {
 
       {/* Tabs */}
       <div className="flex gap-4 border-b border-gray-200 mb-4">
-        {(["details", "usage"] as const).map((tab) => (
+        {(["details", "usage", "skills"] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -316,6 +389,78 @@ export function AgentDetailClient({ agentId }: { agentId: string }) {
               </p>
             </div>
           )}
+        </div>
+      )}
+
+      {activeTab === "skills" && (
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 space-y-4">
+          {skillsError && (
+            <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+              {skillsError}
+            </div>
+          )}
+
+          {/* Add skill */}
+          <div>
+            <p className="text-xs text-gray-400 uppercase tracking-wider mb-2">Add Skill</p>
+            <div className="flex gap-2">
+              <select
+                value={selectedSkillId}
+                onChange={(e) => setSelectedSkillId(e.target.value)}
+                className="flex-1 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+                disabled={skillActionLoading || skillsLoading}
+              >
+                <option value="">— select a skill —</option>
+                {companySkills
+                  .filter((s) => !assignedSkills.some((a) => a.id === s.id))
+                  .map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+              </select>
+              <button
+                onClick={handleAddSkill}
+                disabled={!selectedSkillId || skillActionLoading}
+                className="px-3 py-1.5 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium rounded-lg disabled:opacity-50 transition-colors"
+              >
+                Add
+              </button>
+            </div>
+          </div>
+
+          {/* Assigned skills list */}
+          <div>
+            <p className="text-xs text-gray-400 uppercase tracking-wider mb-2">Assigned Skills</p>
+            {skillsLoading ? (
+              <div className="py-4 text-center text-sm text-gray-400 animate-pulse">Loading…</div>
+            ) : assignedSkills.length === 0 ? (
+              <p className="text-sm text-gray-400">No skills assigned.</p>
+            ) : (
+              <ul className="space-y-2">
+                {assignedSkills.map((skill) => (
+                  <li
+                    key={skill.id}
+                    className="flex items-center justify-between rounded-lg border border-gray-100 px-4 py-2.5"
+                  >
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">{skill.name}</p>
+                      {skill.description && (
+                        <p className="text-xs text-gray-400 mt-0.5">{skill.description}</p>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => handleRemoveSkill(skill.id)}
+                      disabled={skillActionLoading}
+                      className="ml-4 text-xs text-red-500 hover:text-red-700 disabled:opacity-50 transition-colors"
+                    >
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </div>
       )}
 

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import type { UserRole } from "@agentops/shared";
 
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Overview", icon: "⊞" },
@@ -12,16 +13,19 @@ const NAV_ITEMS = [
   { href: "/incidents", label: "Incidents", icon: "⚡" },
   { href: "/audit", label: "Audit Log", icon: "◧" },
   { href: "/usage", label: "Usage", icon: "◑" },
-  { href: "/admin/companies", label: "Admin", icon: "⊛" },
+  { href: "/admin/companies", label: "Admin", icon: "⊛", requiredRole: "oneops_admin" as UserRole },
 ];
 
-export function Sidebar() {
+export function Sidebar({ roles }: { roles: UserRole[] }) {
   const pathname = usePathname();
+  const visibleItems = NAV_ITEMS.filter(
+    (item) => !item.requiredRole || roles.includes(item.requiredRole)
+  );
 
   return (
     <aside className="w-56 shrink-0 flex flex-col bg-gray-900 text-gray-300 min-h-full">
       <nav className="flex-1 px-3 py-4 space-y-1">
-        {NAV_ITEMS.map(({ href, label, icon }) => {
+        {visibleItems.map(({ href, label, icon }) => {
           const active = pathname === href || (href !== "/" && pathname.startsWith(href));
           return (
             <Link

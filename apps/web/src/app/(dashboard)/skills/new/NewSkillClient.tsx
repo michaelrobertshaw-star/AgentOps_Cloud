@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import jsYaml from "js-yaml";
 
 const DEFAULT_YAML = `# Skill definition
 # Fill in the fields below to define this skill's capabilities.
@@ -22,14 +23,27 @@ constraints:
   - Always cite sources when using search results
 `;
 
-function parseYaml(text: string): Record<string, unknown> | null {
-  // Very basic YAML → JSON for the content field.
-  // In production, use a real YAML parser (js-yaml).
+function parseYaml(text: string): { parsed: Record<string, unknown>; error: string | null } {
   try {
-    // We store YAML text as-is in the "yaml" key of content.
-    return { yaml: text };
-  } catch {
-    return null;
+    const doc = jsYaml.load(text);
+    if (typeof doc !== "object" || doc === null) {
+      return { parsed: { raw: text }, error: "YAML must be a mapping (key: value pairs)" };
+    }
+    const raw = doc as Record<string, unknown>;
+
+    // Normalise: extract persona + instructions into top-level keys
+    // so the execution engine can find them via content.instructions
+    const content: Record<string, unknown> = { ...raw, _raw: text };
+
+    // Flatten block-scalar strings (js-yaml returns them as strings already)
+    if (typeof raw.persona === "string") content.persona = raw.persona.trim();
+    if (typeof raw.instructions === "string") content.instructions = raw.instructions.trim();
+    if (typeof raw.constraints === "object") content.constraints = raw.constraints;
+    if (typeof raw.tools === "object") content.tools = raw.tools;
+
+    return { parsed: content, error: null };
+  } catch (e) {
+    return { parsed: {}, error: e instanceof Error ? e.message : "Invalid YAML" };
   }
 }
 
@@ -47,30 +61,44 @@ export function NewSkillClient() {
     setValidating(true);
     setValidationResult(null);
     setTimeout(() => {
-      const content = parseYaml(yaml);
-      if (!content) {
-        setValidationResult({ ok: false, message: "YAML parse error" });
+      const { error: yamlError } = parseYaml(yaml);
+      if (yamlError) {
+        setValidationResult({ ok: false, message: `YAML error: ${yamlError}` });
       } else {
         setValidationResult({ ok: true, message: "YAML is valid ✓" });
       }
       setValidating(false);
-    }, 300);
+    }, 100);
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+
+    const { parsed, error: yamlError } = parseYaml(yaml);
+    if (yamlError) {
+      setError(`YAML error: ${yamlError}`);
+      return;
+    }
+
     setSubmitting(true);
     try {
-      const content = parseYaml(yaml) ?? { yaml };
       const res = await fetch("/api/skills", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, description: description || undefined, content }),
+        body: JSON.stringify({ name, description: description || undefined, content: parsed }),
       });
       if (!res.ok) {
         const b = await res.json().catch(() => ({}));
-        throw new Error((b as { error?: string }).error ?? `HTTP ${res.status}`);
+        // Server returns { error: { code, message } } or { error: "string" }
+        const errObj = (b as { error?: unknown }).error;
+        const msg =
+          typeof errObj === "string"
+            ? errObj
+            : typeof errObj === "object" && errObj !== null && "message" in errObj
+              ? String((errObj as { message: unknown }).message)
+              : `HTTP ${res.status}`;
+        throw new Error(msg);
       }
       const skill = await res.json();
       router.push(`/skills/${skill.id}`);

@@ -2,7 +2,7 @@
  * M6.1 — Company Onboarding Wizard (Admin Routes)
  *
  * Platform-level super-admin routes for managing tenants.
- * All routes require super_admin: true in the JWT.
+ * All routes require oneops_admin role or super_admin: true in the JWT.
  */
 
 import { Router } from "express";
@@ -24,8 +24,10 @@ import type { Request, Response, NextFunction } from "express";
 
 function requireSuperAdmin() {
   return (req: Request, _res: Response, next: NextFunction) => {
-    if (!req.auth?.super_admin) {
-      return next(new ForbiddenError("Super admin access required"));
+    const isOneopsAdmin = req.auth?.roles?.includes("oneops_admin");
+    const isSuperAdmin = req.auth?.super_admin;
+    if (!isOneopsAdmin && !isSuperAdmin) {
+      return next(new ForbiddenError("Platform admin access required"));
     }
     next();
   };

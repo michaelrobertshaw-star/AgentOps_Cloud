@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
 
 interface Department {
   id: string;
@@ -148,18 +149,21 @@ export function AgentsClient() {
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
                   Last Heartbeat
                 </th>
+                <th className="px-4 py-3" />
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {agents.map((agent) => (
-                <tr key={agent.id} className="hover:bg-gray-50 transition-colors">
+                <tr key={agent.id} className="hover:bg-gray-50 transition-colors cursor-pointer">
                   <td className="px-4 py-3">
-                    <div className="font-medium text-gray-900">{agent.name}</div>
-                    {agent.description && (
-                      <div className="text-xs text-gray-400 truncate max-w-xs">
-                        {agent.description}
-                      </div>
-                    )}
+                    <Link href={`/agents/${agent.id}`} className="block">
+                      <div className="font-medium text-gray-900 hover:text-brand-600">{agent.name}</div>
+                      {agent.description && (
+                        <div className="text-xs text-gray-400 truncate max-w-xs">
+                          {agent.description}
+                        </div>
+                      )}
+                    </Link>
                   </td>
                   <td className="px-4 py-3 text-gray-600">{agent.type}</td>
                   <td className="px-4 py-3 text-gray-600">
@@ -178,6 +182,14 @@ export function AgentsClient() {
                     ) : (
                       <span className="text-gray-300">Never</span>
                     )}
+                  </td>
+                  <td className="px-4 py-3">
+                    <Link
+                      href={`/agents/${agent.id}/test`}
+                      className="px-3 py-1 text-xs bg-brand-600 hover:bg-brand-700 text-white rounded-md font-medium"
+                    >
+                      ▶ Chat
+                    </Link>
                   </td>
                 </tr>
               ))}

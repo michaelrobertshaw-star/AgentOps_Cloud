@@ -11,25 +11,32 @@ interface RunStats {
   status: string;
 }
 
+interface Message {
+  role: "user" | "assistant";
+  content: string;
+}
+
 type RunStatus = "idle" | "queued" | "running" | "done" | "error";
 
 export function AgentSandboxClient({ agentId }: { agentId: string }) {
   const router = useRouter();
   const [prompt, setPrompt] = useState("");
-  const [output, setOutput] = useState("");
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [streamingContent, setStreamingContent] = useState("");
   const [runId, setRunId] = useState<string | null>(null);
   const [status, setStatus] = useState<RunStatus>("idle");
   const [stats, setStats] = useState<RunStats | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const outputRef = useRef<HTMLDivElement>(null);
+  const threadRef = useRef<HTMLDivElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Auto-scroll output
+  // Auto-scroll thread to bottom
   useEffect(() => {
-    if (outputRef.current) {
-      outputRef.current.scrollTop = outputRef.current.scrollHeight;
+    if (threadRef.current) {
+      threadRef.current.scrollTop = threadRef.current.scrollHeight;
     }
-  }, [output]);
+  }, [messages, streamingContent]);
 
   // Cleanup SSE on unmount
   useEffect(() => {
@@ -40,29 +47,27 @@ export function AgentSandboxClient({ agentId }: { agentId: string }) {
 
   async function handleRun(e: React.FormEvent) {
     e.preventDefault();
-    if (!prompt.trim()) return;
+    if (!prompt.trim() || status === "queued" || status === "running") return;
 
-    setStatus("queued");
-    setOutput("");
+    const userMessage = prompt.trim();
+    setPrompt("");
     setError(null);
     setStats(null);
-    setRunId(null);
+    setStreamingContent("");
+    setStatus("queued");
+
+    // Append user message to thread
+    setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
 
     // Close any existing SSE
     eventSourceRef.current?.close();
 
     try {
-      // Create a task run for this agent
-      const res = await fetch(`/api/tasks`, {
+      // Start a run via the execution engine
+      const res = await fetch(`/api/agents/${agentId}/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: `Sandbox test: ${prompt.slice(0, 60)}`,
-          description: prompt,
-          agentId,
-          // Use a placeholder department — in M6.4 this will be wired to the execution engine
-          sandbox: true,
-        }),
+        body: JSON.stringify({ input: userMessage, stream: false }),
       });
 
       if (!res.ok) {
@@ -70,24 +75,50 @@ export function AgentSandboxClient({ agentId }: { agentId: string }) {
         throw new Error((b as { error?: string }).error ?? `HTTP ${res.status}`);
       }
 
-      const task = await res.json();
-      const newRunId = task.id;
+      const run = await res.json();
+      const newRunId = run.id ?? run.runId;
       setRunId(newRunId);
       setStatus("running");
 
-      // Connect to SSE stream (M6.4 execution engine endpoint)
-      // Falls back to polling if SSE endpoint not available yet
-      const sseUrl = `/api/task-runs/${newRunId}/stream`;
+      // Connect to SSE stream for this run
+      const sseUrl = `/api/agent-runs/${newRunId}/stream`;
       const es = new EventSource(sseUrl);
       eventSourceRef.current = es;
+      let committed = false; // guard against double-commit from [DONE] + onerror
+
+      function commitStream() {
+        if (committed) return;
+        committed = true;
+        setStreamingContent((current) => {
+          if (current) {
+            setMessages((prev) => [...prev, { role: "assistant", content: current }]);
+          }
+          return "";
+        });
+      }
 
       es.onmessage = (event) => {
+        if (event.data === "[DONE]") {
+          commitStream();
+          setStatus("done");
+          es.close();
+          return;
+        }
+
         try {
           const data = JSON.parse(event.data);
-          if (data.chunk) {
-            setOutput((prev) => prev + data.chunk);
+
+          // First event may carry the runId for correlation — ignore if we already have it
+          if (data.runId && !newRunId) {
+            setRunId(data.runId);
           }
+
+          if (data.chunk) {
+            setStreamingContent((prev) => prev + data.chunk);
+          }
+
           if (data.status === "completed" || data.status === "done") {
+            commitStream();
             setStatus("done");
             setStats({
               tokensInput: data.tokens_input ?? 0,
@@ -98,23 +129,27 @@ export function AgentSandboxClient({ agentId }: { agentId: string }) {
             });
             es.close();
           }
+
           if (data.status === "failed" || data.status === "error") {
+            commitStream();
             setStatus("error");
             setError(data.error ?? "Run failed");
             es.close();
           }
         } catch {
-          // Non-JSON SSE message — treat as raw text chunk
-          setOutput((prev) => prev + event.data);
+          // Non-JSON chunk — treat as raw text
+          setStreamingContent((prev) => prev + event.data);
         }
       };
 
       es.onerror = () => {
-        // SSE not available (M6.4 not implemented yet) — show placeholder message
         es.close();
-        setOutput("⚠️ Execution engine (M6.4) not yet available.\nThis sandbox UI will stream live output once the execution engine is deployed.");
-        setStatus("done");
-        setStats({ tokensInput: 0, tokensOutput: 0, costUsd: 0, durationMs: 0, status: "pending" });
+        // Only treat as an error if we haven't already committed via [DONE]
+        if (!committed) {
+          commitStream();
+          setStatus("error");
+          setError("Stream connection lost.");
+        }
       };
     } catch (e) {
       setStatus("error");
@@ -126,114 +161,140 @@ export function AgentSandboxClient({ agentId }: { agentId: string }) {
     router.push(`/agents/${agentId}?deploy=true`);
   }
 
-  const statusColor: Record<RunStatus, string> = {
-    idle: "text-gray-400",
-    queued: "text-yellow-600",
-    running: "text-blue-600",
-    done: "text-green-600",
-    error: "text-red-600",
-  };
+  // Allow Shift+Enter for newline, Enter to submit
+  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleRun(e as unknown as React.FormEvent);
+    }
+  }
 
-  const statusLabel: Record<RunStatus, string> = {
-    idle: "Idle",
-    queued: "Queued",
-    running: "Running...",
-    done: "Completed",
-    error: "Error",
-  };
+  const isRunning = status === "queued" || status === "running";
 
   return (
-    <div>
+    <div className="flex flex-col h-full" style={{ minHeight: "600px" }}>
       <div className="flex items-center gap-3 mb-1">
         <a href="/agents" className="text-sm text-gray-400 hover:text-gray-600">← Agents</a>
       </div>
-      <h1 className="text-2xl font-bold text-gray-900 mb-6">Agent Sandbox</h1>
+      <h1 className="text-2xl font-bold text-gray-900 mb-4">Agent Sandbox</h1>
 
-      <div className="grid grid-cols-2 gap-6">
-        {/* Left panel: input */}
-        <div className="flex flex-col gap-4">
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
-            <label className="block text-sm font-semibold text-gray-700 mb-2">Test Prompt</label>
-            <form onSubmit={handleRun} className="space-y-3">
-              <textarea
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                rows={10}
-                placeholder="Enter a task or prompt to test this agent..."
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 resize-none"
-              />
-              <button
-                type="submit"
-                disabled={status === "queued" || status === "running" || !prompt.trim()}
-                className="w-full px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium rounded-lg disabled:opacity-50 transition-colors"
-              >
-                {status === "queued" ? "Queuing..." : status === "running" ? "Running..." : "▶ Run"}
-              </button>
-            </form>
-          </div>
-        </div>
+      {/* Chat thread */}
+      <div className="flex-1 bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex flex-col" style={{ minHeight: "400px" }}>
+        <div
+          ref={threadRef}
+          className="flex-1 overflow-y-auto space-y-3 mb-4"
+          style={{ minHeight: "300px", maxHeight: "500px" }}
+        >
+          {messages.length === 0 && !streamingContent && (
+            <p className="text-sm text-gray-300 text-center mt-8">
+              Send a message to test this agent…
+            </p>
+          )}
 
-        {/* Right panel: output */}
-        <div className="flex flex-col gap-4">
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex flex-col flex-1" style={{ minHeight: "300px" }}>
-            <div className="flex items-center justify-between mb-2">
-              <label className="block text-sm font-semibold text-gray-700">Output</label>
-              <span className={`text-xs font-medium ${statusColor[status]}`}>
-                ● {statusLabel[status]}
-              </span>
-            </div>
+          {messages.map((msg, i) => (
             <div
-              ref={outputRef}
-              className="flex-1 bg-gray-50 rounded-lg p-3 text-xs font-mono whitespace-pre-wrap overflow-y-auto min-h-64 max-h-96"
+              key={i}
+              className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
             >
-              {output || (
-                <span className="text-gray-300">Output will appear here when the agent runs...</span>
-              )}
+              <div
+                className={`max-w-[75%] rounded-2xl px-4 py-2 text-sm whitespace-pre-wrap ${
+                  msg.role === "user"
+                    ? "bg-brand-600 text-white rounded-br-sm"
+                    : "bg-gray-100 text-gray-900 rounded-bl-sm"
+                }`}
+              >
+                {msg.content}
+              </div>
             </div>
+          ))}
 
-            {error && (
-              <div className="mt-2 rounded bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">
-                {error}
+          {/* Streaming assistant bubble */}
+          {streamingContent && (
+            <div className="flex justify-start">
+              <div className="max-w-[75%] rounded-2xl rounded-bl-sm px-4 py-2 text-sm whitespace-pre-wrap bg-gray-100 text-gray-900">
+                {streamingContent}
+                <span className="inline-block w-1.5 h-3.5 bg-gray-400 animate-pulse ml-0.5 align-middle" />
               </div>
-            )}
-          </div>
+            </div>
+          )}
 
-          {/* Footer stats */}
-          {stats && (
-            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
-              <div className="grid grid-cols-4 gap-3 text-center">
-                <div>
-                  <p className="text-xs text-gray-400">Input Tokens</p>
-                  <p className="text-sm font-bold text-gray-900">{stats.tokensInput.toLocaleString()}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-400">Output Tokens</p>
-                  <p className="text-sm font-bold text-gray-900">{stats.tokensOutput.toLocaleString()}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-400">Cost</p>
-                  <p className="text-sm font-bold text-gray-900">${stats.costUsd.toFixed(4)}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-400">Duration</p>
-                  <p className="text-sm font-bold text-gray-900">
-                    {stats.durationMs > 0 ? `${(stats.durationMs / 1000).toFixed(1)}s` : "—"}
-                  </p>
-                </div>
+          {/* Running indicator when no output yet */}
+          {isRunning && !streamingContent && (
+            <div className="flex justify-start">
+              <div className="rounded-2xl rounded-bl-sm px-4 py-2 bg-gray-100 text-gray-400 text-sm">
+                <span className="animate-pulse">●●●</span>
               </div>
-
-              {status === "done" && stats.status !== "failed" && (
-                <button
-                  onClick={handleApproveForDeployment}
-                  className="mt-3 w-full px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-colors"
-                >
-                  ✓ Approve for Deployment
-                </button>
-              )}
             </div>
           )}
         </div>
+
+        {error && (
+          <div className="mb-3 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">
+            {error}
+          </div>
+        )}
+
+        {/* Input area */}
+        <form onSubmit={handleRun} className="flex gap-2 items-end">
+          <textarea
+            ref={textareaRef}
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={handleKeyDown}
+            rows={2}
+            placeholder="Enter a prompt… (Enter to send, Shift+Enter for newline)"
+            disabled={isRunning}
+            className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 resize-none disabled:opacity-50"
+          />
+          <button
+            type="submit"
+            disabled={isRunning || !prompt.trim()}
+            className="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium rounded-lg disabled:opacity-50 transition-colors self-end"
+          >
+            {isRunning ? "…" : "Send"}
+          </button>
+        </form>
       </div>
+
+      {/* Stats footer */}
+      {stats && (
+        <div className="mt-4 bg-white rounded-xl border border-gray-200 shadow-sm p-4">
+          <div className="grid grid-cols-4 gap-3 text-center">
+            <div>
+              <p className="text-xs text-gray-400">Input Tokens</p>
+              <p className="text-sm font-bold text-gray-900">{stats.tokensInput.toLocaleString()}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-400">Output Tokens</p>
+              <p className="text-sm font-bold text-gray-900">{stats.tokensOutput.toLocaleString()}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-400">Cost</p>
+              <p className="text-sm font-bold text-gray-900">${stats.costUsd.toFixed(4)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-400">Duration</p>
+              <p className="text-sm font-bold text-gray-900">
+                {stats.durationMs > 0 ? `${(stats.durationMs / 1000).toFixed(1)}s` : "—"}
+              </p>
+            </div>
+          </div>
+
+          {status === "done" && stats.status !== "failed" && (
+            <button
+              onClick={handleApproveForDeployment}
+              className="mt-3 w-full px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-colors"
+            >
+              ✓ Approve for Deployment
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Run ID debug footer */}
+      {runId && (
+        <p className="mt-2 text-xs text-gray-300 text-right">Run: {runId}</p>
+      )}
     </div>
   );
 }

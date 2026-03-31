@@ -1,3 +1,4 @@
+import "dotenv/config"; // Load .env before anything else
 import http from "http";
 import { createApp } from "./app.js";
 import { createWsService } from "./services/wsService.js";

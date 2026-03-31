@@ -27,6 +27,20 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
   return bcrypt.compare(password, hash);
 }
 
+// Map DB role names → JWT UserRole
+// The DB uses company_admin/technical_admin/auditor; JWT RBAC uses oneops_admin/customer_admin/customer_user
+function toJwtRole(dbRole: string): UserRole {
+  const map: Record<string, UserRole> = {
+    company_admin: "customer_admin",
+    technical_admin: "customer_admin",
+    auditor: "customer_user",
+    customer_admin: "customer_admin",
+    customer_user: "customer_user",
+    oneops_admin: "oneops_admin",
+  };
+  return map[dbRole] ?? "customer_user";
+}
+
 // JWT token management
 export async function issueAccessToken(
   userId: string,
@@ -224,7 +238,7 @@ async function loginComplete(
   const accessToken = await issueAccessToken(
     user.id,
     user.companyId,
-    [user.role] as UserRole[],
+    [toJwtRole(user.role)],
     departmentRoles,
     user.superAdmin ?? false,
   );
@@ -325,7 +339,7 @@ export async function refreshAccessToken(refreshTokenStr: string) {
   const accessToken = await issueAccessToken(
     user.id,
     user.companyId,
-    [user.role] as UserRole[],
+    [toJwtRole(user.role)],
     departmentRoles,
     user.superAdmin ?? false,
   );
