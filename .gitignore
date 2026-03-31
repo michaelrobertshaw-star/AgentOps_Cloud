@@ -8,3 +8,9 @@ dist/
 coverage/
 .turbo/
 *.tsbuildinfo
+
+# Build artifacts
+apps/web/.next/
+apps/server/dist/
+dump.rdb
+*.pack.old

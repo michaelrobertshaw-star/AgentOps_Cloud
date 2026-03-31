@@ -11,7 +11,9 @@
   },
   "dependencies": {
     "@agentops/shared": "workspace:*",
+    "@types/js-yaml": "^4.0.9",
     "jose": "^6.2.2",
+    "js-yaml": "^4.1.1",
     "next": "14.2.29",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
