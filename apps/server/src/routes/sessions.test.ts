@@ -105,7 +105,7 @@ describe("GET /api/auth/sessions", () => {
   });
 
   it("returns session list for authenticated user", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .get("/api/auth/sessions")
       .set("Authorization", `Bearer ${token}`);
@@ -124,7 +124,7 @@ describe("GET /api/auth/sessions", () => {
 
   it("returns empty list when user has no sessions", async () => {
     sessionFindMany = [];
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .get("/api/auth/sessions")
       .set("Authorization", `Bearer ${token}`);
@@ -152,7 +152,7 @@ describe("DELETE /api/auth/sessions/:id", () => {
   });
 
   it("revokes an existing session and returns 200", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .delete(`/api/auth/sessions/${SESSION_ID}`)
       .set("Authorization", `Bearer ${token}`);
@@ -163,7 +163,7 @@ describe("DELETE /api/auth/sessions/:id", () => {
 
   it("returns 404 when session is not found", async () => {
     sessionFindFirst = null;
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .delete(`/api/auth/sessions/${SESSION_ID}`)
       .set("Authorization", `Bearer ${token}`);
@@ -173,7 +173,7 @@ describe("DELETE /api/auth/sessions/:id", () => {
 
   it("returns 404 when session belongs to another user", async () => {
     sessionFindFirst = { ...mockSession, userId: "other-user" };
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .delete(`/api/auth/sessions/${SESSION_ID}`)
       .set("Authorization", `Bearer ${token}`);
@@ -200,7 +200,7 @@ describe("DELETE /api/auth/sessions", () => {
   });
 
   it("revokes all sessions and returns count", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .delete("/api/auth/sessions")
       .set("Authorization", `Bearer ${token}`);
@@ -211,7 +211,7 @@ describe("DELETE /api/auth/sessions", () => {
   });
 
   it("revokes all sessions except the specified one", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .delete("/api/auth/sessions")
       .set("Authorization", `Bearer ${token}`)
@@ -223,7 +223,7 @@ describe("DELETE /api/auth/sessions", () => {
 
   it("returns 0 when user has no sessions", async () => {
     sessionFindMany = [];
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .delete("/api/auth/sessions")
       .set("Authorization", `Bearer ${token}`);

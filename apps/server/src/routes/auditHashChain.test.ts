@@ -74,10 +74,10 @@ vi.mock("../services/auditArchiveService.js", () => ({
 // Helpers
 // ---------------------------------------------------------------------------
 async function adminToken() {
-  return issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+  return issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
 }
 async function auditorToken() {
-  return issueAccessToken(USER_ID, COMPANY_ID, ["auditor"], {});
+  return issueAccessToken(USER_ID, COMPANY_ID, ["customer_user"], {});
 }
 
 // ---------------------------------------------------------------------------
@@ -96,7 +96,7 @@ describe("GET /api/companies/:id/audit/verify-chain", () => {
     expect(res.status).toBe(401);
   });
 
-  it("returns 202 with jobId for company_admin", async () => {
+  it("returns 202 with jobId for oneops_admin", async () => {
     const app = createApp();
     const token = await adminToken();
 
@@ -109,7 +109,7 @@ describe("GET /api/companies/:id/audit/verify-chain", () => {
     expect(res.body.message).toMatch(/enqueued/i);
   });
 
-  it("returns 202 with jobId for auditor", async () => {
+  it("returns 202 with jobId for customer_user", async () => {
     const app = createApp();
     const token = await auditorToken();
 
@@ -144,7 +144,7 @@ describe("POST /api/companies/:id/audit/archive", () => {
     expect(res.status).toBe(401);
   });
 
-  it("returns 202 with jobId for company_admin", async () => {
+  it("returns 202 with jobId for oneops_admin", async () => {
     const app = createApp();
     const token = await adminToken();
 
@@ -156,7 +156,7 @@ describe("POST /api/companies/:id/audit/archive", () => {
     expect(res.body.jobId).toBe("mock-job-id-2");
   });
 
-  it("returns 403 for auditor (lacks audit:manage)", async () => {
+  it("returns 403 for customer_user (lacks audit:manage)", async () => {
     const app = createApp();
     const token = await auditorToken();
 
@@ -204,7 +204,7 @@ describe("GET /api/companies/:id/audit/archived", () => {
     expect(res.body.archives).toHaveLength(0);
   });
 
-  it("returns archive list for company_admin", async () => {
+  it("returns archive list for oneops_admin", async () => {
     mockArchives = [
       {
         key: `${COMPANY_ID}/archive-2024-01-01-1234567890.ndjson.gz`,

@@ -10,7 +10,7 @@ import { ForbiddenError, UnauthorizedError } from "../lib/errors.js";
 /**
  * RBAC middleware that checks if the authenticated user has the required permission.
  *
- * For company-level roles (company_admin, technical_admin, auditor), permissions
+ * For company-level roles (oneops_admin, customer_admin, customer_user), permissions
  * are checked globally across the company.
  *
  * For department-scoped permissions (marked with * in the permission matrix),

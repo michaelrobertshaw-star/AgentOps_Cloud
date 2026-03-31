@@ -138,7 +138,7 @@ export async function registerCompanyAndUser(input: {
       email: input.email,
       name: input.name,
       passwordHash,
-      role: "company_admin",
+      role: "oneops_admin",
       status: "active",
     })
     .returning();

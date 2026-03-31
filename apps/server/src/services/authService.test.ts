@@ -28,7 +28,7 @@ describe("authService", () => {
       const token = await issueAccessToken(
         "user-123",
         "company-456",
-        ["company_admin"],
+        ["oneops_admin"],
         { "dept-1": "department_manager" },
       );
 
@@ -38,7 +38,7 @@ describe("authService", () => {
       const payload = await verifyAccessToken(token);
       expect(payload.sub).toBe("user:user-123");
       expect(payload.company_id).toBe("company-456");
-      expect(payload.roles).toEqual(["company_admin"]);
+      expect(payload.roles).toEqual(["oneops_admin"]);
       expect(payload.department_roles).toEqual({ "dept-1": "department_manager" });
     });
 
@@ -55,7 +55,7 @@ describe("authService", () => {
     });
 
     it("rejects a tampered token", async () => {
-      const token = await issueAccessToken("user-123", "company-456", ["auditor"], {});
+      const token = await issueAccessToken("user-123", "company-456", ["customer_user"], {});
       const tampered = token.slice(0, -5) + "xxxxx";
 
       await expect(verifyAccessToken(tampered)).rejects.toThrow();

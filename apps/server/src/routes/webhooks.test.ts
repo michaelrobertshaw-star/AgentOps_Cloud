@@ -128,8 +128,8 @@ describe("POST /api/companies/:companyId/webhooks", () => {
     insertReturning.mockResolvedValue([mockWebhook]);
   });
 
-  it("creates webhook for company_admin and returns 201", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+  it("creates webhook for oneops_admin and returns 201", async () => {
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .post(`/api/companies/${COMPANY_ID}/webhooks`)
       .set("Authorization", `Bearer ${token}`)
@@ -139,8 +139,8 @@ describe("POST /api/companies/:companyId/webhooks", () => {
     expect(res.body).toHaveProperty("secret"); // secret visible on creation
   });
 
-  it("returns 403 for auditor (no company:manage)", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["auditor"], {});
+  it("returns 403 for customer_user (no company:manage)", async () => {
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["customer_user"], {});
     const res = await request(app)
       .post(`/api/companies/${COMPANY_ID}/webhooks`)
       .set("Authorization", `Bearer ${token}`)
@@ -149,7 +149,7 @@ describe("POST /api/companies/:companyId/webhooks", () => {
   });
 
   it("returns 403 when acting on another company", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .post(`/api/companies/other-company/webhooks`)
       .set("Authorization", `Bearer ${token}`)
@@ -165,7 +165,7 @@ describe("POST /api/companies/:companyId/webhooks", () => {
   });
 
   it("returns 400 for invalid URL", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .post(`/api/companies/${COMPANY_ID}/webhooks`)
       .set("Authorization", `Bearer ${token}`)
@@ -174,7 +174,7 @@ describe("POST /api/companies/:companyId/webhooks", () => {
   });
 
   it("returns 400 when events is empty", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .post(`/api/companies/${COMPANY_ID}/webhooks`)
       .set("Authorization", `Bearer ${token}`)
@@ -194,8 +194,8 @@ describe("GET /api/companies/:companyId/webhooks", () => {
     webhookFindMany = [mockWebhook];
   });
 
-  it("returns list for company_admin with masked secrets", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+  it("returns list for oneops_admin with masked secrets", async () => {
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .get(`/api/companies/${COMPANY_ID}/webhooks`)
       .set("Authorization", `Bearer ${token}`);
@@ -204,8 +204,8 @@ describe("GET /api/companies/:companyId/webhooks", () => {
     expect(res.body[0].secret).toBe("***");
   });
 
-  it("returns 403 for auditor", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["auditor"], {});
+  it("returns 403 for customer_user", async () => {
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["customer_user"], {});
     const res = await request(app)
       .get(`/api/companies/${COMPANY_ID}/webhooks`)
       .set("Authorization", `Bearer ${token}`);
@@ -230,8 +230,8 @@ describe("PATCH /api/webhooks/:id", () => {
     updateReturning.mockResolvedValue([{ ...mockWebhook, status: "paused" }]);
   });
 
-  it("updates webhook for company_admin", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+  it("updates webhook for oneops_admin", async () => {
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .patch(`/api/webhooks/${WEBHOOK_ID}`)
       .set("Authorization", `Bearer ${token}`)
@@ -242,7 +242,7 @@ describe("PATCH /api/webhooks/:id", () => {
 
   it("returns 404 for non-existent webhook", async () => {
     webhookFindFirst = null;
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .patch(`/api/webhooks/00000000-0000-0000-0000-000000000099`)
       .set("Authorization", `Bearer ${token}`)
@@ -270,8 +270,8 @@ describe("DELETE /api/webhooks/:id", () => {
     deleteMock.mockResolvedValue(undefined);
   });
 
-  it("deletes webhook for company_admin and returns 200", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+  it("deletes webhook for oneops_admin and returns 200", async () => {
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .delete(`/api/webhooks/${WEBHOOK_ID}`)
       .set("Authorization", `Bearer ${token}`);
@@ -281,7 +281,7 @@ describe("DELETE /api/webhooks/:id", () => {
 
   it("returns 404 for non-existent webhook", async () => {
     webhookFindFirst = null;
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .delete(`/api/webhooks/00000000-0000-0000-0000-000000000099`)
       .set("Authorization", `Bearer ${token}`);
@@ -307,7 +307,7 @@ describe("POST /api/webhooks/:id/test", () => {
   });
 
   it("sends test ping and returns delivery result with HMAC signature", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .post(`/api/webhooks/${WEBHOOK_ID}/test`)
       .set("Authorization", `Bearer ${token}`);
@@ -320,7 +320,7 @@ describe("POST /api/webhooks/:id/test", () => {
 
   it("returns 404 for non-existent webhook", async () => {
     webhookFindFirst = null;
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .post(`/api/webhooks/00000000-0000-0000-0000-000000000099/test`)
       .set("Authorization", `Bearer ${token}`);
@@ -345,8 +345,8 @@ describe("GET /api/webhooks/:id/deliveries", () => {
     deliveryFindMany = [mockDelivery];
   });
 
-  it("returns delivery log for company_admin", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+  it("returns delivery log for oneops_admin", async () => {
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .get(`/api/webhooks/${WEBHOOK_ID}/deliveries`)
       .set("Authorization", `Bearer ${token}`);

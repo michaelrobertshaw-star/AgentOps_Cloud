@@ -35,7 +35,7 @@ export function departmentRoutes() {
       const db = getDb();
 
       const isCompanyWide = req.auth!.roles.some((r) =>
-        ["company_admin", "technical_admin", "auditor"].includes(r),
+        ["oneops_admin", "customer_admin", "customer_user"].includes(r),
       );
 
       let depts;

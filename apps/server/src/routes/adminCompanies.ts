@@ -7,8 +7,8 @@
 
 import { Router } from "express";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
-import { createCipheriv, randomBytes } from "node:crypto";
+import { eq, and } from "drizzle-orm";
+import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { companies, users, connectors, companySettings } from "@agentops/db";
 import { authenticate } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
@@ -57,6 +57,23 @@ function encryptSecrets(secrets: Record<string, string>): { iv: string; tag: str
   };
 }
 
+function decryptSecrets(payload: { iv: string; tag: string; ciphertext: string }): Record<string, string> {
+  const key = getEncryptionKey();
+  const decipher = createDecipheriv(ALGORITHM, key, Buffer.from(payload.iv, "hex"));
+  decipher.setAuthTag(Buffer.from(payload.tag, "hex"));
+  const decrypted = Buffer.concat([
+    decipher.update(Buffer.from(payload.ciphertext, "hex")),
+    decipher.final(),
+  ]);
+  return JSON.parse(decrypted.toString("utf8"));
+}
+
+function maskSecrets(secrets: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(secrets).map(([k, v]) => [k, v.length > 4 ? `${"*".repeat(v.length - 4)}${v.slice(-4)}` : "****"]),
+  );
+}
+
 // ================================================================
 // Validation schemas
 // ================================================================
@@ -76,8 +93,27 @@ const updateSettingsSchema = z.object({
 const inviteUserSchema = z.object({
   email: z.string().email(),
   name: z.string().min(1).max(255),
-  role: z.enum(["company_admin", "technical_admin", "auditor"]).default("company_admin"),
+  role: z.enum(["oneops_admin", "customer_admin", "customer_user"]).default("oneops_admin"),
   password: z.string().min(8),
+});
+
+const connectorTypeEnum = z.enum(["claude_api", "claude_browser", "webhook", "http_get", "minio_storage"]);
+
+const createConnectorAdminSchema = z.object({
+  type: connectorTypeEnum,
+  name: z.string().min(1).max(100),
+  description: z.string().max(500).optional(),
+  config: z.record(z.unknown()).optional().default({}),
+  secrets: z.record(z.string()).optional().default({}),
+  isDefault: z.boolean().optional().default(false),
+});
+
+const updateConnectorAdminSchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+  description: z.string().max(500).optional(),
+  config: z.record(z.unknown()).optional(),
+  secrets: z.record(z.string()).optional(),
+  isDefault: z.boolean().optional(),
 });
 
 // ================================================================
@@ -293,12 +329,128 @@ export function adminCompanyRoutes() {
           console.error("[adminCompanies] Failed to send invite email:", err);
         });
 
-        res.status(201).json(safe);
+        // Return loginPassword once so the UI can display it to the admin.
+        // This is intentional — admin needs to hand credentials to the new user.
+        res.status(201).json({ ...safe, loginPassword: password });
       } catch (err) {
         next(err);
       }
     },
   );
+
+  // ── Connector management (admin-scoped) ────────────────────────────────────
+
+  // GET /api/admin/companies/:id/connectors
+  router.get("/:id/connectors", authenticate(), requireSuperAdmin(), async (req, res, next) => {
+    try {
+      const db = getDb();
+      const companyId = req.params.id as string;
+      const rows = await db.query.connectors.findMany({
+        where: eq(connectors.companyId, companyId),
+        orderBy: (c, { asc }) => [asc(c.name)],
+      });
+      res.json(
+        rows.map((c) => ({
+          ...c,
+          secretsEncrypted: undefined,
+          secrets: c.secretsEncrypted ? maskSecrets(decryptSecrets(c.secretsEncrypted as { iv: string; tag: string; ciphertext: string })) : {},
+        })),
+      );
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // POST /api/admin/companies/:id/connectors
+  router.post(
+    "/:id/connectors",
+    authenticate(),
+    requireSuperAdmin(),
+    validate(createConnectorAdminSchema),
+    async (req, res, next) => {
+      try {
+        const db = getDb();
+        const companyId = req.params.id as string;
+        const company = await db.query.companies.findFirst({ where: eq(companies.id, companyId) });
+        if (!company) throw new NotFoundError("Company");
+
+        const { type, name, description, config, secrets, isDefault } = req.body as z.infer<typeof createConnectorAdminSchema>;
+        const secretsEncrypted = Object.keys(secrets).length > 0 ? encryptSecrets(secrets) : null;
+
+        const [connector] = await db
+          .insert(connectors)
+          .values({ companyId, type, name, description, config, secretsEncrypted, isDefault })
+          .returning();
+
+        res.status(201).json({ ...connector, secretsEncrypted: undefined, secrets: secrets ? maskSecrets(secrets) : {} });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // PATCH /api/admin/companies/:id/connectors/:connectorId
+  router.patch(
+    "/:id/connectors/:connectorId",
+    authenticate(),
+    requireSuperAdmin(),
+    validate(updateConnectorAdminSchema),
+    async (req, res, next) => {
+      try {
+        const db = getDb();
+        const companyId = req.params.id as string;
+        const connectorId = req.params.connectorId as string;
+
+        const existing = await db.query.connectors.findFirst({
+          where: and(eq(connectors.id, connectorId), eq(connectors.companyId, companyId)),
+        });
+        if (!existing) throw new NotFoundError("Connector");
+
+        const { name, description, config, secrets, isDefault } = req.body as z.infer<typeof updateConnectorAdminSchema>;
+        let secretsEncrypted = existing.secretsEncrypted;
+        if (secrets !== undefined) {
+          secretsEncrypted = Object.keys(secrets).length > 0 ? encryptSecrets(secrets) : null;
+        }
+
+        const [updated] = await db
+          .update(connectors)
+          .set({
+            ...(name !== undefined && { name }),
+            ...(description !== undefined && { description }),
+            ...(config !== undefined && { config }),
+            ...(isDefault !== undefined && { isDefault }),
+            secretsEncrypted,
+            updatedAt: new Date(),
+          })
+          .where(and(eq(connectors.id, connectorId), eq(connectors.companyId, companyId)))
+          .returning();
+
+        const decrypted = updated.secretsEncrypted ? decryptSecrets(updated.secretsEncrypted as { iv: string; tag: string; ciphertext: string }) : {};
+        res.json({ ...updated, secretsEncrypted: undefined, secrets: maskSecrets(decrypted) });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // DELETE /api/admin/companies/:id/connectors/:connectorId
+  router.delete("/:id/connectors/:connectorId", authenticate(), requireSuperAdmin(), async (req, res, next) => {
+    try {
+      const db = getDb();
+      const companyId = req.params.id as string;
+      const connectorId = req.params.connectorId as string;
+
+      const existing = await db.query.connectors.findFirst({
+        where: and(eq(connectors.id, connectorId), eq(connectors.companyId, companyId)),
+      });
+      if (!existing) throw new NotFoundError("Connector");
+
+      await db.delete(connectors).where(and(eq(connectors.id, connectorId), eq(connectors.companyId, companyId)));
+      res.status(204).end();
+    } catch (err) {
+      next(err);
+    }
+  });
 
   return router;
 }

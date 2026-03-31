@@ -82,8 +82,8 @@ describe("GET /api/companies/:companyId/audit-logs", () => {
     logFindMany = [LOG1, LOG2];
   });
 
-  it("returns paginated log list for company_admin", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+  it("returns paginated log list for oneops_admin", async () => {
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .get(`/api/companies/${COMPANY_ID}/audit-logs`)
       .set("Authorization", `Bearer ${token}`);
@@ -94,8 +94,8 @@ describe("GET /api/companies/:companyId/audit-logs", () => {
     expect(res.body).toHaveProperty("total");
   });
 
-  it("returns log list for auditor role", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["auditor"], {});
+  it("returns log list for customer_user role", async () => {
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["customer_user"], {});
     const res = await request(app)
       .get(`/api/companies/${COMPANY_ID}/audit-logs`)
       .set("Authorization", `Bearer ${token}`);
@@ -113,7 +113,7 @@ describe("GET /api/companies/:companyId/audit-logs", () => {
   });
 
   it("returns 403 when accessing another company", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .get(`/api/companies/other-company/audit-logs`)
       .set("Authorization", `Bearer ${token}`);
@@ -126,7 +126,7 @@ describe("GET /api/companies/:companyId/audit-logs", () => {
   });
 
   it("filters by action", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["auditor"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["customer_user"], {});
     const res = await request(app)
       .get(`/api/companies/${COMPANY_ID}/audit-logs?action=incident:create`)
       .set("Authorization", `Bearer ${token}`);
@@ -136,7 +136,7 @@ describe("GET /api/companies/:companyId/audit-logs", () => {
   });
 
   it("filters by entityType (resourceType alias)", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["auditor"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["customer_user"], {});
     const res = await request(app)
       .get(`/api/companies/${COMPANY_ID}/audit-logs?entityType=incident`)
       .set("Authorization", `Bearer ${token}`);
@@ -145,7 +145,7 @@ describe("GET /api/companies/:companyId/audit-logs", () => {
   });
 
   it("filters by actorId", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["auditor"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["customer_user"], {});
     const res = await request(app)
       .get(`/api/companies/${COMPANY_ID}/audit-logs?actorId=${USER_ID}`)
       .set("Authorization", `Bearer ${token}`);
@@ -154,7 +154,7 @@ describe("GET /api/companies/:companyId/audit-logs", () => {
   });
 
   it("respects limit parameter", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["auditor"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["customer_user"], {});
     const res = await request(app)
       .get(`/api/companies/${COMPANY_ID}/audit-logs?limit=1`)
       .set("Authorization", `Bearer ${token}`);
@@ -164,7 +164,7 @@ describe("GET /api/companies/:companyId/audit-logs", () => {
   });
 
   it("cursor-based pagination returns next page", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["auditor"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["customer_user"], {});
     // First page
     const page1 = await request(app)
       .get(`/api/companies/${COMPANY_ID}/audit-logs?limit=1`)
@@ -196,7 +196,7 @@ describe("GET /api/companies/:companyId/audit-logs/verify", () => {
   });
 
   it("returns ok=true when all hashes are valid", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["auditor"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["customer_user"], {});
     const res = await request(app)
       .get(`/api/companies/${COMPANY_ID}/audit-logs/verify`)
       .set("Authorization", `Bearer ${token}`);
@@ -211,7 +211,7 @@ describe("GET /api/companies/:companyId/audit-logs/verify", () => {
       LOG1,
       makeLog("00000000-0000-0000-0000-000000000081", { entryHash: "invalid-hash" }),
     ];
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["auditor"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["customer_user"], {});
     const res = await request(app)
       .get(`/api/companies/${COMPANY_ID}/audit-logs/verify`)
       .set("Authorization", `Bearer ${token}`);
@@ -226,7 +226,7 @@ describe("GET /api/companies/:companyId/audit-logs/verify", () => {
   });
 
   it("returns 403 for another company", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["auditor"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["customer_user"], {});
     const res = await request(app)
       .get(`/api/companies/other-company/audit-logs/verify`)
       .set("Authorization", `Bearer ${token}`);

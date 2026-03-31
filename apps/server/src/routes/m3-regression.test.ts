@@ -344,8 +344,8 @@ describe("M1 Regression: Auth endpoints", () => {
 describe("M2 Regression: Agent routes", () => {
   const app = createApp();
 
-  it("GET /api/agents returns 200 for company_admin", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+  it("GET /api/agents returns 200 for oneops_admin", async () => {
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .get("/api/agents")
       .set("Authorization", `Bearer ${token}`);
@@ -400,8 +400,8 @@ describe("M2 Regression: Task routes", () => {
     ];
   });
 
-  it("GET /api/tasks returns 200 for company_admin", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+  it("GET /api/tasks returns 200 for oneops_admin", async () => {
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .get("/api/tasks")
       .set("Authorization", `Bearer ${token}`);
@@ -449,7 +449,7 @@ describe("M3 Scaffold: Workspace CRUD (routes pending implementation)", () => {
 
   it("POST /api/workspaces — creates workspace, returns 201 with id", async () => {
     workspaceFindFirst = null; // no duplicate
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .post(`/api/departments/${DEPT_ID}/workspaces`)
       .set("Authorization", `Bearer ${token}`)
@@ -458,8 +458,8 @@ describe("M3 Scaffold: Workspace CRUD (routes pending implementation)", () => {
     expect(res.body).toHaveProperty("id");
   });
 
-  it("GET /api/workspaces — lists workspaces for company_admin", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+  it("GET /api/workspaces — lists workspaces for oneops_admin", async () => {
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .get(`/api/departments/${DEPT_ID}/workspaces`)
       .set("Authorization", `Bearer ${token}`);
@@ -469,7 +469,7 @@ describe("M3 Scaffold: Workspace CRUD (routes pending implementation)", () => {
   });
 
   it("GET /api/workspaces/:id — returns workspace detail", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .get(`/api/workspaces/${WORKSPACE_ID}`)
       .set("Authorization", `Bearer ${token}`);
@@ -479,7 +479,7 @@ describe("M3 Scaffold: Workspace CRUD (routes pending implementation)", () => {
 
   it("PATCH /api/workspaces/:id — archives workspace", async () => {
     // Archive is implemented as DELETE which soft-archives (sets status=archived)
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .delete(`/api/workspaces/${WORKSPACE_ID}`)
       .set("Authorization", `Bearer ${token}`);
@@ -519,7 +519,7 @@ describe("M3 Scaffold: File Upload & Download (routes pending implementation)", 
   });
 
   it("POST /api/workspaces/:id/files — uploads valid file, stored in MinIO", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .post(`/api/workspaces/${WORKSPACE_ID}/files`)
       .set("Authorization", `Bearer ${token}`)
@@ -533,7 +533,7 @@ describe("M3 Scaffold: File Upload & Download (routes pending implementation)", 
   });
 
   it("POST /api/workspaces/:id/files — rejects invalid MIME type (text/html blocked)", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .post(`/api/workspaces/${WORKSPACE_ID}/files`)
       .set("Authorization", `Bearer ${token}`)
@@ -545,7 +545,7 @@ describe("M3 Scaffold: File Upload & Download (routes pending implementation)", 
   });
 
   it("GET /api/workspaces/:id/files/:fileId/download — returns presigned URL", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .get(`/api/workspaces/${WORKSPACE_ID}/files/${FILE_ID}/download`)
       .set("Authorization", `Bearer ${token}`)
@@ -556,7 +556,7 @@ describe("M3 Scaffold: File Upload & Download (routes pending implementation)", 
 
   it("Checksum: downloaded file content matches uploaded content", async () => {
     // Verify upload response includes a non-null checksum (stored for integrity checks)
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .post(`/api/workspaces/${WORKSPACE_ID}/files`)
       .set("Authorization", `Bearer ${token}`)
@@ -570,7 +570,7 @@ describe("M3 Scaffold: File Upload & Download (routes pending implementation)", 
   });
 
   it("DELETE /api/workspaces/:id/files/:fileId — removes from MinIO and DB", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .delete(`/api/workspaces/${WORKSPACE_ID}/files/${FILE_ID}`)
       .set("Authorization", `Bearer ${token}`);
@@ -599,7 +599,7 @@ describe("M3 Scaffold: File Upload & Download (routes pending implementation)", 
   });
 
   it("Security: path traversal attempt ('../../../etc/passwd') rejected with 400", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .post(`/api/workspaces/${WORKSPACE_ID}/files`)
       .set("Authorization", `Bearer ${token}`)
@@ -612,7 +612,7 @@ describe("M3 Scaffold: File Upload & Download (routes pending implementation)", 
 
   it("Security: MIME bypass (rename .exe to .jpg) detected and rejected", async () => {
     // Block executable MIME types regardless of file extension
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .post(`/api/workspaces/${WORKSPACE_ID}/files`)
       .set("Authorization", `Bearer ${token}`)
@@ -641,7 +641,7 @@ describe("M3 Scaffold: Incidents (routes pending implementation)", () => {
 
   it("POST /api/incidents — creates incident with status=open", async () => {
     insertReturnValue = [{ ...mockIncident, status: "open" }];
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .post(`/api/departments/${DEPT_ID}/incidents`)
       .set("Authorization", `Bearer ${token}`)
@@ -682,7 +682,7 @@ describe("M3 Scaffold: Incidents (routes pending implementation)", () => {
   it("PATCH /api/incidents/:id — transitions resolved → closed", async () => {
     incidentFindFirst = { ...mockIncident, status: "resolved" };
     updateReturnValue = [{ ...mockIncident, status: "closed" }];
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .patch(`/api/incidents/${INCIDENT_ID}`)
       .set("Authorization", `Bearer ${token}`)
@@ -694,7 +694,7 @@ describe("M3 Scaffold: Incidents (routes pending implementation)", () => {
   it("PATCH /api/incidents/:id — invalid status transition returns 422", async () => {
     // open → closed is not a valid transition; implementation returns 400 (ValidationError)
     incidentFindFirst = { ...mockIncident, status: "open" };
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .patch(`/api/incidents/${INCIDENT_ID}`)
       .set("Authorization", `Bearer ${token}`)
@@ -752,10 +752,10 @@ describe("M3 Scaffold: Incidents (routes pending implementation)", () => {
       .send({ status: "closed" });
     expect(managerRes.status).toBe(403);
 
-    // company_admin can close
+    // oneops_admin can close
     incidentFindFirst = { ...mockIncident, status: "resolved" };
     updateReturnValue = [{ ...mockIncident, status: "closed" }];
-    const adminToken = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const adminToken = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const adminRes = await request(app)
       .patch(`/api/incidents/${INCIDENT_ID}`)
       .set("Authorization", `Bearer ${adminToken}`)
@@ -798,7 +798,7 @@ describe("M3 Scaffold: Webhooks (routes pending implementation)", () => {
   });
 
   it("POST /api/webhooks — creates webhook endpoint", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .post(`/api/companies/${COMPANY_ID}/webhooks`)
       .set("Authorization", `Bearer ${token}`)
@@ -810,7 +810,7 @@ describe("M3 Scaffold: Webhooks (routes pending implementation)", () => {
 
   it("POST /api/webhooks/:id/ping — sends test ping, returns HMAC signature", async () => {
     insertReturnValue = [mockDelivery];
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .post(`/api/webhooks/${WEBHOOK_ID}/test`)
       .set("Authorization", `Bearer ${token}`);
@@ -906,7 +906,7 @@ describe("M3 Scaffold: WebSocket real-time events (full flow pending M3 routes)"
     const wsModule = await import("../services/wsService.js");
 
     try {
-      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
       const ws = await connectWs(wsUrl, token);
 
       // Consume welcome
@@ -941,7 +941,7 @@ describe("M3 Scaffold: WebSocket real-time events (full flow pending M3 routes)"
     const wsModule = await import("../services/wsService.js");
 
     try {
-      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
       const ws = await connectWs(wsUrl, token);
 
       // Consume welcome
@@ -977,7 +977,7 @@ describe("M3 Scaffold: WebSocket real-time events (full flow pending M3 routes)"
     const wsModule = await import("../services/wsService.js");
 
     try {
-      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
       const ws = await connectWs(wsUrl, token);
 
       // Consume welcome

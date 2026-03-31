@@ -88,7 +88,7 @@ vi.mock("../lib/db.js", () => ({
 }));
 
 async function adminToken() {
-  return issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+  return issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
 }
 
 // ---------------------------------------------------------------------------

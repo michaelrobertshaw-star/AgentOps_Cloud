@@ -149,8 +149,8 @@ describe("POST /api/departments/:deptId/incidents", () => {
     expect(res.body).toHaveProperty("id");
   });
 
-  it("creates incident for company_admin", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+  it("creates incident for oneops_admin", async () => {
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .post(`/api/departments/${DEPT_ID}/incidents`)
       .set("Authorization", `Bearer ${token}`)
@@ -177,7 +177,7 @@ describe("POST /api/departments/:deptId/incidents", () => {
   });
 
   it("returns 400 for invalid severity", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .post(`/api/departments/${DEPT_ID}/incidents`)
       .set("Authorization", `Bearer ${token}`)
@@ -187,7 +187,7 @@ describe("POST /api/departments/:deptId/incidents", () => {
 
   it("returns 404 when department not found", async () => {
     deptFindFirst = null;
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .post(`/api/departments/00000000-0000-0000-0000-000000000099/incidents`)
       .set("Authorization", `Bearer ${token}`)
@@ -208,8 +208,8 @@ describe("GET /api/departments/:deptId/incidents", () => {
     incidentFindMany = [mockIncident];
   });
 
-  it("returns paginated list for company_admin", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+  it("returns paginated list for oneops_admin", async () => {
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .get(`/api/departments/${DEPT_ID}/incidents`)
       .set("Authorization", `Bearer ${token}`);
@@ -231,8 +231,8 @@ describe("GET /api/departments/:deptId/incidents", () => {
     expect(res.status).toBe(200);
   });
 
-  it("returns list for auditor (incident:view)", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["auditor"], {});
+  it("returns list for customer_user (incident:view)", async () => {
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["customer_user"], {});
     const res = await request(app)
       .get(`/api/departments/${DEPT_ID}/incidents`)
       .set("Authorization", `Bearer ${token}`);
@@ -257,8 +257,8 @@ describe("GET /api/incidents/:id", () => {
     attachmentFindMany = [];
   });
 
-  it("returns incident with attachments for company_admin", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+  it("returns incident with attachments for oneops_admin", async () => {
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .get(`/api/incidents/${INCIDENT_ID}`)
       .set("Authorization", `Bearer ${token}`);
@@ -270,7 +270,7 @@ describe("GET /api/incidents/:id", () => {
 
   it("returns 404 for non-existent incident", async () => {
     incidentFindFirst = null;
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .get(`/api/incidents/00000000-0000-0000-0000-000000000099`)
       .set("Authorization", `Bearer ${token}`);
@@ -319,8 +319,8 @@ describe("PATCH /api/incidents/:id — status transitions", () => {
     expect(res.status).toBe(200);
   });
 
-  it("company_admin can transition open → investigating", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+  it("oneops_admin can transition open → investigating", async () => {
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .patch(`/api/incidents/${INCIDENT_ID}`)
       .set("Authorization", `Bearer ${token}`)
@@ -340,7 +340,7 @@ describe("PATCH /api/incidents/:id — status transitions", () => {
   });
 
   it("returns 400 for invalid status transition (open → closed)", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .patch(`/api/incidents/${INCIDENT_ID}`)
       .set("Authorization", `Bearer ${token}`)
@@ -348,7 +348,7 @@ describe("PATCH /api/incidents/:id — status transitions", () => {
     expect(res.status).toBe(400);
   });
 
-  it("only company_admin can close a resolved incident", async () => {
+  it("only oneops_admin can close a resolved incident", async () => {
     incidentFindFirst = { ...mockIncident, status: "resolved" };
     updateReturning.mockResolvedValue([{ ...mockIncident, status: "closed" }]);
 
@@ -362,8 +362,8 @@ describe("PATCH /api/incidents/:id — status transitions", () => {
       .send({ status: "closed" });
     expect(managerRes.status).toBe(403);
 
-    // company_admin can close
-    const adminToken = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    // oneops_admin can close
+    const adminToken = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const adminRes = await request(app)
       .patch(`/api/incidents/${INCIDENT_ID}`)
       .set("Authorization", `Bearer ${adminToken}`)
@@ -391,7 +391,7 @@ describe("PATCH /api/incidents/:id — status transitions", () => {
 
   it("returns 404 for non-existent incident", async () => {
     incidentFindFirst = null;
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .patch(`/api/incidents/00000000-0000-0000-0000-000000000099`)
       .set("Authorization", `Bearer ${token}`)
@@ -439,7 +439,7 @@ describe("POST /api/incidents/:id/attachments", () => {
 
   it("returns 409 when file already attached", async () => {
     attachmentFindFirst = mockAttachment;
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .post(`/api/incidents/${INCIDENT_ID}/attachments`)
       .set("Authorization", `Bearer ${token}`)
@@ -449,7 +449,7 @@ describe("POST /api/incidents/:id/attachments", () => {
 
   it("returns 404 when workspace file not found", async () => {
     fileFindFirst = null;
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .post(`/api/incidents/${INCIDENT_ID}/attachments`)
       .set("Authorization", `Bearer ${token}`)

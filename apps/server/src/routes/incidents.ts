@@ -222,11 +222,11 @@ export function incidentRoutes() {
             );
           }
 
-          // Closing requires company_admin
+          // Closing requires oneops_admin
           if (newStatus === "closed") {
-            const isAdmin = req.auth!.roles.includes("company_admin");
+            const isAdmin = req.auth!.roles.includes("oneops_admin");
             if (!isAdmin) {
-              throw new ForbiddenError("Only company_admin can close incidents");
+              throw new ForbiddenError("Only oneops_admin can close incidents");
             }
           }
 

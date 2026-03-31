@@ -98,8 +98,8 @@ describe("Agent routes", () => {
   });
 
   describe("GET /api/agents", () => {
-    it("returns 200 for company_admin", async () => {
-      const token = await issueAccessToken("user-1", "co-1", ["company_admin"], {});
+    it("returns 200 for oneops_admin", async () => {
+      const token = await issueAccessToken("user-1", "co-1", ["oneops_admin"], {});
       const res = await request(app)
         .get("/api/agents")
         .set("Authorization", `Bearer ${token}`);
@@ -107,16 +107,16 @@ describe("Agent routes", () => {
       expect(Array.isArray(res.body)).toBe(true);
     });
 
-    it("returns 200 for technical_admin", async () => {
-      const token = await issueAccessToken("user-1", "co-1", ["technical_admin"], {});
+    it("returns 200 for customer_admin", async () => {
+      const token = await issueAccessToken("user-1", "co-1", ["customer_admin"], {});
       const res = await request(app)
         .get("/api/agents")
         .set("Authorization", `Bearer ${token}`);
       expect(res.status).toBe(200);
     });
 
-    it("returns 200 for auditor (read-only agent:view)", async () => {
-      const token = await issueAccessToken("user-1", "co-1", ["auditor"], {});
+    it("returns 200 for customer_user (read-only agent:view)", async () => {
+      const token = await issueAccessToken("user-1", "co-1", ["customer_user"], {});
       const res = await request(app)
         .get("/api/agents")
         .set("Authorization", `Bearer ${token}`);
@@ -130,8 +130,8 @@ describe("Agent routes", () => {
   });
 
   describe("POST /api/agents", () => {
-    it("creates an agent for company_admin", async () => {
-      const token = await issueAccessToken("user-1", "co-1", ["company_admin"], {});
+    it("creates an agent for oneops_admin", async () => {
+      const token = await issueAccessToken("user-1", "co-1", ["oneops_admin"], {});
       const res = await request(app)
         .post("/api/agents")
         .set("Authorization", `Bearer ${token}`)
@@ -142,7 +142,7 @@ describe("Agent routes", () => {
     });
 
     it("returns 400 for missing required fields", async () => {
-      const token = await issueAccessToken("user-1", "co-1", ["company_admin"], {});
+      const token = await issueAccessToken("user-1", "co-1", ["oneops_admin"], {});
       const res = await request(app)
         .post("/api/agents")
         .set("Authorization", `Bearer ${token}`)
@@ -150,8 +150,8 @@ describe("Agent routes", () => {
       expect(res.status).toBe(400);
     });
 
-    it("returns 403 for auditor (no agent:create)", async () => {
-      const token = await issueAccessToken("user-1", "co-1", ["auditor"], {});
+    it("returns 403 for customer_user (no agent:create)", async () => {
+      const token = await issueAccessToken("user-1", "co-1", ["customer_user"], {});
       const res = await request(app)
         .post("/api/agents")
         .set("Authorization", `Bearer ${token}`)
@@ -183,8 +183,8 @@ describe("Agent routes", () => {
   });
 
   describe("DELETE /api/agents/:id", () => {
-    it("returns 403 for auditor", async () => {
-      const token = await issueAccessToken("user-1", "co-1", ["auditor"], {});
+    it("returns 403 for customer_user", async () => {
+      const token = await issueAccessToken("user-1", "co-1", ["customer_user"], {});
       const res = await request(app)
         .delete("/api/agents/agent-1")
         .set("Authorization", `Bearer ${token}`);

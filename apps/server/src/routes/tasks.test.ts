@@ -81,8 +81,8 @@ describe("Task routes", () => {
   const app = createApp();
 
   describe("GET /api/tasks", () => {
-    it("returns 200 for company_admin", async () => {
-      const token = await issueAccessToken("user-1", "co-1", ["company_admin"], {});
+    it("returns 200 for oneops_admin", async () => {
+      const token = await issueAccessToken("user-1", "co-1", ["oneops_admin"], {});
       const res = await request(app)
         .get("/api/tasks")
         .set("Authorization", `Bearer ${token}`);
@@ -90,8 +90,8 @@ describe("Task routes", () => {
       expect(Array.isArray(res.body)).toBe(true);
     });
 
-    it("returns 200 for auditor (task:view)", async () => {
-      const token = await issueAccessToken("user-1", "co-1", ["auditor"], {});
+    it("returns 200 for customer_user (task:view)", async () => {
+      const token = await issueAccessToken("user-1", "co-1", ["customer_user"], {});
       const res = await request(app)
         .get("/api/tasks")
         .set("Authorization", `Bearer ${token}`);
@@ -115,8 +115,8 @@ describe("Task routes", () => {
   });
 
   describe("POST /api/tasks", () => {
-    it("creates a task for company_admin", async () => {
-      const token = await issueAccessToken("user-1", "co-1", ["company_admin"], {});
+    it("creates a task for oneops_admin", async () => {
+      const token = await issueAccessToken("user-1", "co-1", ["oneops_admin"], {});
       const res = await request(app)
         .post("/api/tasks")
         .set("Authorization", `Bearer ${token}`)
@@ -131,7 +131,7 @@ describe("Task routes", () => {
     });
 
     it("returns 400 for missing required fields", async () => {
-      const token = await issueAccessToken("user-1", "co-1", ["company_admin"], {});
+      const token = await issueAccessToken("user-1", "co-1", ["oneops_admin"], {});
       const res = await request(app)
         .post("/api/tasks")
         .set("Authorization", `Bearer ${token}`)
@@ -139,8 +139,8 @@ describe("Task routes", () => {
       expect(res.status).toBe(400);
     });
 
-    it("returns 403 for auditor (no task:create)", async () => {
-      const token = await issueAccessToken("user-1", "co-1", ["auditor"], {});
+    it("returns 403 for customer_user (no task:create)", async () => {
+      const token = await issueAccessToken("user-1", "co-1", ["customer_user"], {});
       const res = await request(app)
         .post("/api/tasks")
         .set("Authorization", `Bearer ${token}`)
@@ -184,7 +184,7 @@ describe("Task routes", () => {
 describe("Task status transition validation", () => {
   it("validates task priority enum", async () => {
     const app = createApp();
-    const token = await issueAccessToken("user-1", "co-1", ["company_admin"], {});
+    const token = await issueAccessToken("user-1", "co-1", ["oneops_admin"], {});
     const res = await request(app)
       .post("/api/tasks")
       .set("Authorization", `Bearer ${token}`)

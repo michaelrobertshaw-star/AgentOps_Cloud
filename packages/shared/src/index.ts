@@ -2,7 +2,7 @@ export type CompanyStatus = "active" | "suspended" | "deactivated";
 
 export type UserStatus = "active" | "invited" | "deactivated";
 
-export type UserRole = "company_admin" | "technical_admin" | "auditor";
+export type UserRole = "oneops_admin" | "customer_admin" | "customer_user";
 
 export type DepartmentStatus = "active" | "archived";
 
@@ -89,7 +89,7 @@ export type Permission =
 
 // Role → permission mapping (from ONE-3 permission matrix)
 export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
-  company_admin: [
+  oneops_admin: [
     "company:manage",
     "company:view",
     "department:create",
@@ -117,7 +117,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     "connector:manage",
     "connector:view",
   ],
-  technical_admin: [
+  customer_admin: [
     "company:view",
     "department:view",
     "department:intervene",
@@ -138,7 +138,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     "connector:manage",
     "connector:view",
   ],
-  auditor: [
+  customer_user: [
     "company:view",
     "department:view",
     "agent:view",

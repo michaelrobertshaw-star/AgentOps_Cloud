@@ -79,7 +79,7 @@ vi.mock("../lib/db.js", () => ({
 // Helper: issue a valid access token for the mock user
 // ---------------------------------------------------------------------------
 async function authToken() {
-  return issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+  return issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
 }
 
 // ---------------------------------------------------------------------------
@@ -94,7 +94,7 @@ describe("MFA routes", () => {
       companyId: COMPANY_ID,
       email: "admin@example.com",
       name: "Admin",
-      role: "company_admin",
+      role: "oneops_admin",
       passwordHash: "$2b$12$hash",
       status: "active",
       mfaEnabled: false,

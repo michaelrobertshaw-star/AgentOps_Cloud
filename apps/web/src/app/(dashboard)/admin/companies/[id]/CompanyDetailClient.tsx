@@ -49,7 +49,13 @@ interface InviteForm {
   password: string;
 }
 
-const EMPTY_INVITE: InviteForm = { email: "", name: "", role: "company_admin", password: "" };
+const EMPTY_INVITE: InviteForm = { email: "", name: "", role: "oneops_admin", password: "" };
+
+const ROLE_LABELS: Record<string, string> = {
+  oneops_admin: "OneOps Admin",
+  customer_admin: "Customer Admin",
+  customer_user: "Customer User",
+};
 
 export function CompanyDetailClient({ companyId }: { companyId: string }) {
   const [company, setCompany] = useState<Company | null>(null);
@@ -61,6 +67,7 @@ export function CompanyDetailClient({ companyId }: { companyId: string }) {
   const [invite, setInvite] = useState<InviteForm>(EMPTY_INVITE);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [createdCreds, setCreatedCreds] = useState<{ email: string; password: string; name: string } | null>(null);
 
   // Usage state
   const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null);
@@ -130,8 +137,10 @@ export function CompanyDetailClient({ companyId }: { companyId: string }) {
         const b = await res.json().catch(() => ({}));
         throw new Error((b as { error?: string }).error ?? `HTTP ${res.status}`);
       }
+      const created = await res.json();
       setShowInvite(false);
       setInvite(EMPTY_INVITE);
+      setCreatedCreds({ email: created.email, password: created.loginPassword, name: created.name });
       await fetchData();
     } catch (e) {
       setInviteError(e instanceof Error ? e.message : "Failed to invite user");
@@ -172,6 +181,12 @@ export function CompanyDetailClient({ companyId }: { companyId: string }) {
           <p className="text-sm text-gray-400 font-mono">{company.name}</p>
         </div>
         <div className="flex items-center gap-3">
+          <Link
+            href={`/admin/companies/${companyId}/connectors`}
+            className="px-3 py-1.5 bg-white border border-gray-300 hover:border-gray-400 text-gray-700 text-sm font-medium rounded-lg transition-colors"
+          >
+            Connectors →
+          </Link>
           <span className={`inline-flex items-center px-2 py-1 rounded text-xs font-semibold ${
             company.status === "active" ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"
           }`}>
@@ -245,7 +260,7 @@ export function CompanyDetailClient({ companyId }: { companyId: string }) {
                     <tr key={user.id} className="hover:bg-gray-50">
                       <td className="px-4 py-3 font-medium text-gray-900">{user.name}</td>
                       <td className="px-4 py-3 text-gray-500">{user.email}</td>
-                      <td className="px-4 py-3 text-gray-500 text-xs">{user.role.replace("_", " ")}</td>
+                      <td className="px-4 py-3 text-gray-500 text-xs">{ROLE_LABELS[user.role] ?? user.role.replace(/_/g, " ")}</td>
                       <td className="px-4 py-3">
                         <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${
                           user.status === "active" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
@@ -413,9 +428,9 @@ export function CompanyDetailClient({ companyId }: { companyId: string }) {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
                 <select value={invite.role} onChange={(e) => setInvite((f) => ({ ...f, role: e.target.value }))}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
-                  <option value="company_admin">Company Admin</option>
-                  <option value="technical_admin">Technical Admin</option>
-                  <option value="auditor">Auditor</option>
+                  <option value="oneops_admin">OneOps Admin</option>
+                  <option value="customer_admin">Customer Admin</option>
+                  <option value="customer_user">Customer User</option>
                 </select>
               </div>
               <div>
@@ -433,6 +448,50 @@ export function CompanyDetailClient({ companyId }: { companyId: string }) {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Credentials modal — shown once after user creation */}
+      {createdCreds && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center text-green-600 text-xl">✓</div>
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">User created</h2>
+                <p className="text-sm text-gray-500">Share these credentials — they won&apos;t be shown again</p>
+              </div>
+            </div>
+            <div className="space-y-3 bg-gray-50 rounded-xl p-4 font-mono text-sm">
+              <div>
+                <span className="text-gray-500 font-sans text-xs uppercase tracking-wide">Login URL</span>
+                <p className="text-gray-900 mt-0.5 break-all">http://localhost:3000/login</p>
+              </div>
+              <div>
+                <span className="text-gray-500 font-sans text-xs uppercase tracking-wide">Email</span>
+                <p className="text-gray-900 mt-0.5">{createdCreds.email}</p>
+              </div>
+              <div>
+                <span className="text-gray-500 font-sans text-xs uppercase tracking-wide">Password</span>
+                <p className="text-gray-900 mt-0.5">{createdCreds.password}</p>
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                const text = `Login: http://localhost:3000/login\nEmail: ${createdCreds.email}\nPassword: ${createdCreds.password}`;
+                navigator.clipboard.writeText(text);
+              }}
+              className="mt-4 w-full px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50"
+            >
+              Copy to clipboard
+            </button>
+            <button
+              onClick={() => setCreatedCreds(null)}
+              className="mt-2 w-full px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium rounded-lg"
+            >
+              Done
+            </button>
           </div>
         </div>
       )}

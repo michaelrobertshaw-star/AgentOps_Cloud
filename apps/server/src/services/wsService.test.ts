@@ -103,7 +103,7 @@ describe("WsService — authentication", () => {
   });
 
   it("accepts a valid JWT and sends a welcome message", async () => {
-    const token = await issueAccessToken("user-1", "co-1", ["company_admin"], {});
+    const token = await issueAccessToken("user-1", "co-1", ["oneops_admin"], {});
     const ws = await connectWs(server, token);
     const msg = await waitForMessage(ws);
 
@@ -137,7 +137,7 @@ describe("WsService — channel subscribe / unsubscribe", () => {
     ({ server, wsService } = createTestServer());
     await listenServer(server);
 
-    const token = await issueAccessToken("user-1", "co-1", ["company_admin"], {});
+    const token = await issueAccessToken("user-1", "co-1", ["oneops_admin"], {});
     ws = await connectWs(server, token);
     // Consume the welcome message
     await waitForMessage(ws);
@@ -210,7 +210,7 @@ describe("WsService — ping / pong", () => {
     ({ server, wsService } = createTestServer());
     await listenServer(server);
 
-    const token = await issueAccessToken("user-1", "co-1", ["company_admin"], {});
+    const token = await issueAccessToken("user-1", "co-1", ["oneops_admin"], {});
     ws = await connectWs(server, token);
     await waitForMessage(ws); // welcome
   });
@@ -244,7 +244,7 @@ describe("WsService — broadcast and company isolation", () => {
   });
 
   it("delivers broadcast to clients subscribed to the channel", async () => {
-    const token = await issueAccessToken("user-1", "co-1", ["company_admin"], {});
+    const token = await issueAccessToken("user-1", "co-1", ["oneops_admin"], {});
     const ws = await connectWs(server, token);
     await waitForMessage(ws); // welcome
 
@@ -270,7 +270,7 @@ describe("WsService — broadcast and company isolation", () => {
 
   it("does NOT deliver broadcast to clients in a different company", async () => {
     // Client in company co-2
-    const tokenB = await issueAccessToken("user-2", "co-2", ["company_admin"], {});
+    const tokenB = await issueAccessToken("user-2", "co-2", ["oneops_admin"], {});
     const wsB = await connectWs(server, tokenB);
     await waitForMessage(wsB); // welcome
 
@@ -295,7 +295,7 @@ describe("WsService — broadcast and company isolation", () => {
   });
 
   it("does NOT deliver to clients not subscribed to the channel", async () => {
-    const token = await issueAccessToken("user-1", "co-1", ["company_admin"], {});
+    const token = await issueAccessToken("user-1", "co-1", ["oneops_admin"], {});
     const ws = await connectWs(server, token);
     await waitForMessage(ws); // welcome
 
@@ -330,7 +330,7 @@ describe("WsService — invalid message handling", () => {
     ({ server, wsService } = createTestServer());
     await listenServer(server);
 
-    const token = await issueAccessToken("user-1", "co-1", ["company_admin"], {});
+    const token = await issueAccessToken("user-1", "co-1", ["oneops_admin"], {});
     ws = await connectWs(server, token);
     await waitForMessage(ws); // welcome
   });

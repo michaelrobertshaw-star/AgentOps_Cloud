@@ -107,8 +107,8 @@ describe("POST /api/workspaces/:id/files", () => {
     updateSet.mockReturnValue({ where: updateWhere });
   });
 
-  it("uploads a file for company_admin and returns 201", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+  it("uploads a file for oneops_admin and returns 201", async () => {
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .post(`/api/workspaces/${WORKSPACE_ID}/files`)
       .set("Authorization", `Bearer ${token}`)
@@ -139,8 +139,8 @@ describe("POST /api/workspaces/:id/files", () => {
     expect(res.status).toBe(403);
   });
 
-  it("returns 403 for auditor (no workspace:write)", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["auditor"], {});
+  it("returns 403 for customer_user (no workspace:write)", async () => {
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["customer_user"], {});
     const res = await request(app)
       .post(`/api/workspaces/${WORKSPACE_ID}/files`)
       .set("Authorization", `Bearer ${token}`)
@@ -156,7 +156,7 @@ describe("POST /api/workspaces/:id/files", () => {
   });
 
   it("returns 400 when no file field is provided", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .post(`/api/workspaces/${WORKSPACE_ID}/files`)
       .set("Authorization", `Bearer ${token}`)
@@ -169,7 +169,7 @@ describe("POST /api/workspaces/:id/files", () => {
     // a filename that still contains ".." after normalization (e.g. "..file").
     // In production, raw HTTP clients can send "../../etc/passwd" directly, which
     // our isSafePath() check catches because it looks for any ".." substring.
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .post(`/api/workspaces/${WORKSPACE_ID}/files`)
       .set("Authorization", `Bearer ${token}`)
@@ -178,7 +178,7 @@ describe("POST /api/workspaces/:id/files", () => {
   });
 
   it("rejects blocked MIME type text/html", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .post(`/api/workspaces/${WORKSPACE_ID}/files`)
       .set("Authorization", `Bearer ${token}`)
@@ -188,7 +188,7 @@ describe("POST /api/workspaces/:id/files", () => {
 
   it("returns 404 when workspace not found", async () => {
     workspaceFindFirst = null;
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .post(`/api/workspaces/00000000-0000-0000-0000-000000000099/files`)
       .set("Authorization", `Bearer ${token}`)
@@ -209,8 +209,8 @@ describe("GET /api/workspaces/:id/files", () => {
     fileFindMany = [mockFile];
   });
 
-  it("returns paginated file list for company_admin", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+  it("returns paginated file list for oneops_admin", async () => {
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .get(`/api/workspaces/${WORKSPACE_ID}/files`)
       .set("Authorization", `Bearer ${token}`);
@@ -222,8 +222,8 @@ describe("GET /api/workspaces/:id/files", () => {
     expect(res.body).toHaveProperty("limit");
   });
 
-  it("returns file list for auditor (workspace:view)", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["auditor"], {});
+  it("returns file list for customer_user (workspace:view)", async () => {
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["customer_user"], {});
     const res = await request(app)
       .get(`/api/workspaces/${WORKSPACE_ID}/files`)
       .set("Authorization", `Bearer ${token}`);
@@ -258,8 +258,8 @@ describe("GET /api/workspaces/:id/files/:fileId", () => {
     fileFindFirst = mockFile;
   });
 
-  it("returns file metadata for company_admin", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+  it("returns file metadata for oneops_admin", async () => {
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .get(`/api/workspaces/${WORKSPACE_ID}/files/${FILE_ID}`)
       .set("Authorization", `Bearer ${token}`);
@@ -269,7 +269,7 @@ describe("GET /api/workspaces/:id/files/:fileId", () => {
 
   it("returns 404 for non-existent file", async () => {
     fileFindFirst = null;
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .get(`/api/workspaces/${WORKSPACE_ID}/files/00000000-0000-0000-0000-000000000099`)
       .set("Authorization", `Bearer ${token}`);
@@ -293,8 +293,8 @@ describe("GET /api/workspaces/:id/files/:fileId/download", () => {
     fileFindFirst = mockFile;
   });
 
-  it("redirects to presigned URL for company_admin", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+  it("redirects to presigned URL for oneops_admin", async () => {
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .get(`/api/workspaces/${WORKSPACE_ID}/files/${FILE_ID}/download`)
       .set("Authorization", `Bearer ${token}`)
@@ -311,7 +311,7 @@ describe("GET /api/workspaces/:id/files/:fileId/download", () => {
 
   it("returns 404 when file not found", async () => {
     fileFindFirst = null;
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .get(`/api/workspaces/${WORKSPACE_ID}/files/00000000-0000-0000-0000-000000000099/download`)
       .set("Authorization", `Bearer ${token}`);
@@ -343,8 +343,8 @@ describe("DELETE /api/workspaces/:id/files/:fileId", () => {
     expect(res.body.message).toBe("File deleted");
   });
 
-  it("deletes file for company_admin", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+  it("deletes file for oneops_admin", async () => {
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .delete(`/api/workspaces/${WORKSPACE_ID}/files/${FILE_ID}`)
       .set("Authorization", `Bearer ${token}`);
@@ -361,8 +361,8 @@ describe("DELETE /api/workspaces/:id/files/:fileId", () => {
     expect(res.status).toBe(403);
   });
 
-  it("returns 403 for auditor", async () => {
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["auditor"], {});
+  it("returns 403 for customer_user", async () => {
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["customer_user"], {});
     const res = await request(app)
       .delete(`/api/workspaces/${WORKSPACE_ID}/files/${FILE_ID}`)
       .set("Authorization", `Bearer ${token}`);
@@ -377,7 +377,7 @@ describe("DELETE /api/workspaces/:id/files/:fileId", () => {
 
   it("returns 404 when file not found", async () => {
     fileFindFirst = null;
-    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
     const res = await request(app)
       .delete(`/api/workspaces/${WORKSPACE_ID}/files/00000000-0000-0000-0000-000000000099`)
       .set("Authorization", `Bearer ${token}`);

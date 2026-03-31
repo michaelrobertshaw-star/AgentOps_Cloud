@@ -137,7 +137,7 @@ describe("WebSocket real-time event stream", () => {
   it("connects with valid JWT and receives welcome message", async () => {
     const { wsUrl, cleanup } = await createTestServer();
     try {
-      const token = await issueAccessToken("user-1", "co-1", ["company_admin"], {});
+      const token = await issueAccessToken("user-1", "co-1", ["oneops_admin"], {});
       const ws = await connectClient(wsUrl, token);
 
       const welcome = await nextMessage(ws);
@@ -179,7 +179,7 @@ describe("WebSocket real-time event stream", () => {
   it("handles subscribe message and confirms subscription", async () => {
     const { wsUrl, cleanup } = await createTestServer();
     try {
-      const token = await issueAccessToken("user-1", "co-1", ["company_admin"], {});
+      const token = await issueAccessToken("user-1", "co-1", ["oneops_admin"], {});
       const ws = await connectClient(wsUrl, token);
 
       // Consume welcome
@@ -204,7 +204,7 @@ describe("WebSocket real-time event stream", () => {
     const wsModule = await import("../services/wsService.js");
 
     try {
-      const token = await issueAccessToken("user-1", "co-1", ["company_admin"], {});
+      const token = await issueAccessToken("user-1", "co-1", ["oneops_admin"], {});
       const ws = await connectClient(wsUrl, token);
 
       // Consume welcome
@@ -240,7 +240,7 @@ describe("WebSocket real-time event stream", () => {
     const wsModule = await import("../services/wsService.js");
 
     try {
-      const token = await issueAccessToken("user-1", "co-1", ["company_admin"], {});
+      const token = await issueAccessToken("user-1", "co-1", ["oneops_admin"], {});
       const ws = await connectClient(wsUrl, token);
 
       // Consume welcome
@@ -276,7 +276,7 @@ describe("WebSocket real-time event stream", () => {
   it("responds to ping with pong", async () => {
     const { wsUrl, cleanup } = await createTestServer();
     try {
-      const token = await issueAccessToken("user-1", "co-1", ["company_admin"], {});
+      const token = await issueAccessToken("user-1", "co-1", ["oneops_admin"], {});
       const ws = await connectClient(wsUrl, token);
 
       // Consume welcome

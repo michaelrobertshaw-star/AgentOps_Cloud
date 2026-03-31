@@ -8,7 +8,7 @@ import { getDb } from "../lib/db.js";
 /**
  * Middleware that enforces department-scoped access.
  *
- * Company-level roles (company_admin, technical_admin) bypass department checks.
+ * Company-level roles (oneops_admin, customer_admin) bypass department checks.
  * Other users must be a member of the department the resource belongs to.
  *
  * The departmentId is resolved from:
@@ -24,13 +24,13 @@ export function requireDepartmentAccess(resourceType: "agent" | "task") {
     }
 
     // Company-level roles bypass department scope
-    const companyRoles: UserRole[] = ["company_admin", "technical_admin"];
+    const companyRoles: UserRole[] = ["oneops_admin", "customer_admin"];
     if (req.auth.roles.some((r) => companyRoles.includes(r as UserRole))) {
       return next();
     }
 
-    // Auditors have read-only access across all departments
-    if (req.auth.roles.includes("auditor" as UserRole)) {
+    // Customer Users have read-only access across all departments
+    if (req.auth.roles.includes("customer_user" as UserRole)) {
       return next();
     }
 

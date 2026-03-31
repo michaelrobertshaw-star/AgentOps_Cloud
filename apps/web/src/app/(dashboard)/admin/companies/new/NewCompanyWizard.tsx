@@ -15,7 +15,7 @@ interface Step1Data {
 interface Step2Data {
   spendCapUsd: string;
   brandColor: string;
-  allowedConnectors: string;
+  allowedConnectors: string[];
 }
 
 interface Step3Data {
@@ -44,13 +44,13 @@ export function NewCompanyWizard() {
   const [step2, setStep2] = useState<Step2Data>({
     spendCapUsd: "",
     brandColor: "",
-    allowedConnectors: "",
+    allowedConnectors: [],
   });
 
   const [step3, setStep3] = useState<Step3Data>({
     email: "",
     userName: "",
-    role: "company_admin",
+    role: "oneops_admin",
     password: "",
   });
 
@@ -92,7 +92,7 @@ export function NewCompanyWizard() {
       const settings: Record<string, unknown> = {};
       if (step2.spendCapUsd) settings.spend_cap_usd = parseFloat(step2.spendCapUsd);
       if (step2.brandColor) settings.brand_color = step2.brandColor;
-      if (step2.allowedConnectors) settings.allowed_connectors = step2.allowedConnectors.split(",").map((s) => s.trim());
+      if (step2.allowedConnectors.length > 0) settings.allowed_connectors = step2.allowedConnectors;
 
       if (Object.keys(settings).length > 0) {
         const res = await fetch(`/api/admin/companies/${createdCompanyId}/settings`, {
@@ -279,17 +279,27 @@ export function NewCompanyWizard() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Allowed Connectors
-                <span className="ml-1 text-xs text-gray-400">— comma-separated</span>
-              </label>
-              <input
-                type="text"
-                placeholder="claude_api, webhook"
-                value={step2.allowedConnectors}
-                onChange={(e) => setStep2((s) => ({ ...s, allowedConnectors: e.target.value }))}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
-              />
+              <label className="block text-sm font-medium text-gray-700 mb-2">Allowed Connectors</label>
+              <div className="grid grid-cols-2 gap-2">
+                {(["claude_api", "claude_browser", "webhook", "http_get", "minio_storage"] as const).map((type) => (
+                  <label key={type} className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={step2.allowedConnectors.includes(type)}
+                      onChange={(e) =>
+                        setStep2((s) => ({
+                          ...s,
+                          allowedConnectors: e.target.checked
+                            ? [...s.allowedConnectors, type]
+                            : s.allowedConnectors.filter((c) => c !== type),
+                        }))
+                      }
+                      className="rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+                    />
+                    <span className="text-sm text-gray-700 font-mono">{type}</span>
+                  </label>
+                ))}
+              </div>
             </div>
             <div className="flex justify-between pt-2">
               <button
@@ -346,9 +356,9 @@ export function NewCompanyWizard() {
                 onChange={(e) => setStep3((s) => ({ ...s, role: e.target.value }))}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
               >
-                <option value="company_admin">Company Admin</option>
-                <option value="technical_admin">Technical Admin</option>
-                <option value="auditor">Auditor</option>
+                <option value="oneops_admin">OneOps Admin</option>
+                <option value="customer_admin">Customer Admin</option>
+                <option value="customer_user">Customer User</option>
               </select>
             </div>
             <div>

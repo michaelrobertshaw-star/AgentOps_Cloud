@@ -103,7 +103,7 @@ describe("Rate limit middleware", () => {
   describe("requests under the limit return success with proper headers", () => {
     it("sets X-RateLimit-Limit and X-RateLimit-Remaining on successful request", async () => {
       const app = buildApp({ companyRpm: 100, userRpm: 50 });
-      const token = await issueAccessToken("user-1", "co-1", ["company_admin"], {});
+      const token = await issueAccessToken("user-1", "co-1", ["oneops_admin"], {});
 
       const res = await request(app)
         .get("/api/protected")
@@ -170,7 +170,7 @@ describe("Rate limit middleware", () => {
 
     it("returns 429 when user-level limit is exceeded even if company limit is not", async () => {
       const app = buildApp({ companyRpm: 1000, userRpm: 2 });
-      const token = await issueAccessToken("user-throttled", "co-big", ["company_admin"], {});
+      const token = await issueAccessToken("user-throttled", "co-big", ["oneops_admin"], {});
 
       let lastRes: request.Response | null = null;
       for (let i = 0; i < 5; i++) {

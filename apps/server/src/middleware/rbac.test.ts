@@ -37,8 +37,8 @@ function createTestApp() {
 describe("RBAC middleware", () => {
   const app = createTestApp();
 
-  it("allows company_admin to access company:view", async () => {
-    const token = await issueAccessToken("user-1", "co-1", ["company_admin"], {});
+  it("allows oneops_admin to access company:view", async () => {
+    const token = await issueAccessToken("user-1", "co-1", ["oneops_admin"], {});
     const res = await request(app)
       .get("/test/company")
       .set("Authorization", `Bearer ${token}`);
@@ -46,8 +46,8 @@ describe("RBAC middleware", () => {
     expect(res.body.ok).toBe(true);
   });
 
-  it("allows auditor to access company:view", async () => {
-    const token = await issueAccessToken("user-1", "co-1", ["auditor"], {});
+  it("allows customer_user to access company:view", async () => {
+    const token = await issueAccessToken("user-1", "co-1", ["customer_user"], {});
     const res = await request(app)
       .get("/test/company")
       .set("Authorization", `Bearer ${token}`);

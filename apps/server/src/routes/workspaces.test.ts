@@ -81,9 +81,9 @@ describe("Workspace routes", () => {
   // =============================================
 
   describe("POST /api/departments/:deptId/workspaces", () => {
-    it("creates a workspace for company_admin", async () => {
+    it("creates a workspace for oneops_admin", async () => {
       workspaceFindFirstResult = null; // no duplicate
-      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
       const res = await request(app)
         .post(`/api/departments/${DEPT_ID}/workspaces`)
         .set("Authorization", `Bearer ${token}`)
@@ -93,9 +93,9 @@ describe("Workspace routes", () => {
       expect(res.body.name).toBe("Test Workspace");
     });
 
-    it("creates a workspace for technical_admin", async () => {
+    it("creates a workspace for customer_admin", async () => {
       workspaceFindFirstResult = null;
-      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["technical_admin"], {});
+      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["customer_admin"], {});
       const res = await request(app)
         .post(`/api/departments/${DEPT_ID}/workspaces`)
         .set("Authorization", `Bearer ${token}`)
@@ -138,8 +138,8 @@ describe("Workspace routes", () => {
       expect(res.status).toBe(403);
     });
 
-    it("returns 403 for auditor (no workspace:write)", async () => {
-      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["auditor"], {});
+    it("returns 403 for customer_user (no workspace:write)", async () => {
+      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["customer_user"], {});
       const res = await request(app)
         .post(`/api/departments/${DEPT_ID}/workspaces`)
         .set("Authorization", `Bearer ${token}`)
@@ -148,7 +148,7 @@ describe("Workspace routes", () => {
     });
 
     it("returns 400 for missing name", async () => {
-      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
       const res = await request(app)
         .post(`/api/departments/${DEPT_ID}/workspaces`)
         .set("Authorization", `Bearer ${token}`)
@@ -169,8 +169,8 @@ describe("Workspace routes", () => {
   // =============================================
 
   describe("GET /api/departments/:deptId/workspaces", () => {
-    it("returns workspaces for company_admin", async () => {
-      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    it("returns workspaces for oneops_admin", async () => {
+      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
       const res = await request(app)
         .get(`/api/departments/${DEPT_ID}/workspaces`)
         .set("Authorization", `Bearer ${token}`);
@@ -179,8 +179,8 @@ describe("Workspace routes", () => {
       expect(res.body.length).toBeGreaterThan(0);
     });
 
-    it("returns workspaces for auditor", async () => {
-      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["auditor"], {});
+    it("returns workspaces for customer_user", async () => {
+      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["customer_user"], {});
       const res = await request(app)
         .get(`/api/departments/${DEPT_ID}/workspaces`)
         .set("Authorization", `Bearer ${token}`);
@@ -208,8 +208,8 @@ describe("Workspace routes", () => {
   // =============================================
 
   describe("GET /api/workspaces/:id", () => {
-    it("returns workspace for company_admin", async () => {
-      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    it("returns workspace for oneops_admin", async () => {
+      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
       const res = await request(app)
         .get(`/api/workspaces/${WORKSPACE_ID}`)
         .set("Authorization", `Bearer ${token}`);
@@ -217,8 +217,8 @@ describe("Workspace routes", () => {
       expect(res.body.id).toBe(WORKSPACE_ID);
     });
 
-    it("returns workspace for auditor", async () => {
-      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["auditor"], {});
+    it("returns workspace for customer_user", async () => {
+      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["customer_user"], {});
       const res = await request(app)
         .get(`/api/workspaces/${WORKSPACE_ID}`)
         .set("Authorization", `Bearer ${token}`);
@@ -237,7 +237,7 @@ describe("Workspace routes", () => {
 
     it("returns 404 for non-existent workspace", async () => {
       workspaceFindFirstResult = null;
-      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
       const res = await request(app)
         .get(`/api/workspaces/00000000-0000-0000-0000-000000000099`)
         .set("Authorization", `Bearer ${token}`);
@@ -255,8 +255,8 @@ describe("Workspace routes", () => {
   // =============================================
 
   describe("PATCH /api/workspaces/:id", () => {
-    it("updates workspace for company_admin", async () => {
-      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    it("updates workspace for oneops_admin", async () => {
+      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
       const res = await request(app)
         .patch(`/api/workspaces/${WORKSPACE_ID}`)
         .set("Authorization", `Bearer ${token}`)
@@ -299,8 +299,8 @@ describe("Workspace routes", () => {
   // =============================================
 
   describe("DELETE /api/workspaces/:id", () => {
-    it("archives workspace for company_admin", async () => {
-      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["company_admin"], {});
+    it("archives workspace for oneops_admin", async () => {
+      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["oneops_admin"], {});
       const res = await request(app)
         .delete(`/api/workspaces/${WORKSPACE_ID}`)
         .set("Authorization", `Bearer ${token}`);
@@ -328,8 +328,8 @@ describe("Workspace routes", () => {
       expect(res.status).toBe(403);
     });
 
-    it("returns 403 for auditor", async () => {
-      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["auditor"], {});
+    it("returns 403 for customer_user", async () => {
+      const token = await issueAccessToken(USER_ID, COMPANY_ID, ["customer_user"], {});
       const res = await request(app)
         .delete(`/api/workspaces/${WORKSPACE_ID}`)
         .set("Authorization", `Bearer ${token}`);

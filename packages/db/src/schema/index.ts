@@ -28,9 +28,9 @@ export const companyStatusEnum = pgEnum("company_status", [
 export const userStatusEnum = pgEnum("user_status", ["active", "invited", "deactivated"]);
 
 export const userRoleEnum = pgEnum("user_role", [
-  "company_admin",
-  "technical_admin",
-  "auditor",
+  "oneops_admin",
+  "customer_admin",
+  "customer_user",
 ]);
 
 export const departmentStatusEnum = pgEnum("department_status", ["active", "archived"]);
@@ -157,7 +157,7 @@ export const users = pgTable(
     email: varchar("email", { length: 255 }).notNull(),
     name: varchar("name", { length: 255 }).notNull(),
     passwordHash: varchar("password_hash", { length: 255 }),
-    role: userRoleEnum("role").default("auditor").notNull(),
+    role: userRoleEnum("role").default("customer_user").notNull(),
     status: userStatusEnum("status").default("active").notNull(),
     mfaEnabled: boolean("mfa_enabled").default(false).notNull(),
     mfaSecret: varchar("mfa_secret", { length: 255 }),
