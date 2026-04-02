@@ -70,6 +70,44 @@ const STEP_TYPES: { key: StepType; label: string; tag: string; color: string; bg
   { key: "save", label: "SAVE", tag: "ACTION", color: "text-amber-700", bg: "bg-amber-50 border-amber-300", description: "Save/export the output" },
 ];
 
+// ── Step default persistence (localStorage) ──────────────────
+
+const STEP_DEFAULTS_KEY = "workspace_step_defaults";
+
+function getSavedStepDefault(stepType: StepType): Record<string, unknown> | null {
+  try {
+    const raw = localStorage.getItem(STEP_DEFAULTS_KEY);
+    if (!raw) return null;
+    const all = JSON.parse(raw);
+    return all[stepType] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function saveStepDefault(stepType: StepType, config: Record<string, unknown>) {
+  try {
+    const raw = localStorage.getItem(STEP_DEFAULTS_KEY);
+    const all = raw ? JSON.parse(raw) : {};
+    all[stepType] = config;
+    localStorage.setItem(STEP_DEFAULTS_KEY, JSON.stringify(all));
+  } catch {
+    // localStorage unavailable — silently fail
+  }
+}
+
+function clearStepDefault(stepType: StepType) {
+  try {
+    const raw = localStorage.getItem(STEP_DEFAULTS_KEY);
+    if (!raw) return;
+    const all = JSON.parse(raw);
+    delete all[stepType];
+    localStorage.setItem(STEP_DEFAULTS_KEY, JSON.stringify(all));
+  } catch {
+    // ignore
+  }
+}
+
 const FILTER_OPERATORS: Record<string, string> = {
   eq: "is",
   neq: "is not",
@@ -211,6 +249,9 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
   const [probeError, setProbeError] = useState<string | null>(null);
   const [probedFieldCount, setProbedFieldCount] = useState(0);
 
+  // Step default save feedback — tracks which step types just saved (for brief "Saved" indicator)
+  const [savedDefaultFeedback, setSavedDefaultFeedback] = useState<Record<string, boolean>>({});
+
   // Template designer
   const [templates, setTemplates] = useState<Array<{ id: string; name: string; type: string; base_pdf_key: string | null; pdfme_schema: unknown }>>([]);
   const [designerTemplateId, setDesignerTemplateId] = useState<string | null>(null);
@@ -315,6 +356,16 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
 
   function addStep(type: StepType) {
     const id = `step_${Date.now()}`;
+
+    // Check for saved defaults first
+    const saved = getSavedStepDefault(type);
+    if (saved) {
+      setSteps([...steps, { id, type, config: { ...saved } }]);
+      setAddingStep(false);
+      return;
+    }
+
+    // Fallback to built-in defaults
     const config: Record<string, unknown> = {};
 
     if (type === "pull") { config.tool_name = ""; config.params = {}; }
@@ -855,6 +906,30 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
                           </>
                         )}
                       </button>
+                      {savedDefaultFeedback[step.id] ? (
+                        <span className="text-[10px] text-green-600 font-medium">Saved as default</span>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            saveStepDefault(step.type, step.config);
+                            setSavedDefaultFeedback((prev) => ({ ...prev, [step.id]: true }));
+                            setTimeout(() => setSavedDefaultFeedback((prev) => { const n = { ...prev }; delete n[step.id]; return n; }), 2000);
+                          }}
+                          className="text-gray-400 hover:text-green-600 text-xs"
+                          title="Save current config as default for new steps of this type"
+                        >
+                          save default
+                        </button>
+                      )}
+                      {getSavedStepDefault(step.type) && !savedDefaultFeedback[step.id] && (
+                        <button
+                          onClick={() => { clearStepDefault(step.type); }}
+                          className="text-gray-300 hover:text-amber-500 text-xs"
+                          title="Clear saved default"
+                        >
+                          clear default
+                        </button>
+                      )}
                       <button onClick={() => removeStep(step.id)} className="text-gray-400 hover:text-red-500 text-xs">remove</button>
                     </div>
                   </div>
