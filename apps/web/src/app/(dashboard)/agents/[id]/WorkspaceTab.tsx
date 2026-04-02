@@ -255,6 +255,12 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
   // Template designer
   const [templates, setTemplates] = useState<Array<{ id: string; name: string; type: string; base_pdf_key: string | null; pdfme_schema: unknown }>>([]);
   const [designerTemplateId, setDesignerTemplateId] = useState<string | null>(null);
+  const [renamingTemplateId, setRenamingTemplateId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+
+  // Preview modal for SAVE step
+  const [previewFiles, setPreviewFiles] = useState<Array<{ filename: string; data: Record<string, unknown> }> | null>(null);
+  const [previewIndex, setPreviewIndex] = useState(0);
 
   // ── Load resources ──
 
@@ -1358,7 +1364,6 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
                         />
                         <button
                           onClick={async () => {
-                            // Create a new template and open designer
                             try {
                               const res = await fetchWithTenant("/api/workspace/templates", {
                                 method: "POST",
@@ -1385,20 +1390,69 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
                         </button>
                       </div>
 
-                      {/* Selected template actions */}
-                      {!!step.config.template && (
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => setDesignerTemplateId(step.config.template as string)}
-                            className="px-3 py-1.5 bg-purple-100 hover:bg-purple-200 text-purple-700 text-xs font-medium rounded-lg border border-purple-300"
-                          >
-                            Open Designer
-                          </button>
-                          <span className="text-[10px] text-gray-400">
-                            Upload PDF, place fields, map to data columns
-                          </span>
-                        </div>
-                      )}
+                      {/* Selected template: rename + actions */}
+                      {!!step.config.template && (() => {
+                        const selectedTmpl = templates.find((t) => t.id === step.config.template);
+                        return (
+                          <div className="space-y-2">
+                            {/* Rename row */}
+                            <div className="flex items-center gap-2">
+                              {renamingTemplateId === step.config.template ? (
+                                <div className="flex items-center gap-1.5">
+                                  <input
+                                    autoFocus
+                                    value={renameValue}
+                                    onChange={(e) => setRenameValue(e.target.value)}
+                                    onKeyDown={async (e) => {
+                                      if (e.key === "Enter" && renameValue.trim()) {
+                                        await fetchWithTenant(`/api/workspace/templates/${step.config.template}`, {
+                                          method: "PATCH",
+                                          headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify({ name: renameValue.trim() }),
+                                        });
+                                        await fetchTemplates();
+                                        setRenamingTemplateId(null);
+                                      }
+                                      if (e.key === "Escape") setRenamingTemplateId(null);
+                                    }}
+                                    className="border border-purple-300 rounded px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-purple-300 w-48"
+                                    placeholder="Template name..."
+                                  />
+                                  <button
+                                    onClick={async () => {
+                                      if (!renameValue.trim()) return;
+                                      await fetchWithTenant(`/api/workspace/templates/${step.config.template}`, {
+                                        method: "PATCH",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({ name: renameValue.trim() }),
+                                      });
+                                      await fetchTemplates();
+                                      setRenamingTemplateId(null);
+                                    }}
+                                    className="text-green-600 hover:text-green-700 text-xs font-medium"
+                                  >save</button>
+                                  <button onClick={() => setRenamingTemplateId(null)} className="text-gray-400 hover:text-gray-600 text-xs">cancel</button>
+                                </div>
+                              ) : (
+                                <button
+                                  onClick={() => { setRenamingTemplateId(step.config.template as string); setRenameValue(selectedTmpl?.name ?? ""); }}
+                                  className="text-xs text-gray-500 hover:text-purple-600 flex items-center gap-1"
+                                  title="Rename template"
+                                >
+                                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                                  {selectedTmpl?.name ?? "Unnamed"}
+                                </button>
+                              )}
+                              <button
+                                onClick={() => setDesignerTemplateId(step.config.template as string)}
+                                className="px-3 py-1.5 bg-purple-100 hover:bg-purple-200 text-purple-700 text-xs font-medium rounded-lg border border-purple-300"
+                              >
+                                Open Designer
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })()}
 
                       {/* Per-record toggle */}
                       <div className="flex items-center gap-2 text-sm">
@@ -1413,34 +1467,59 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
                         />
                       </div>
 
-                      {/* Filename pattern */}
-                      <div className="flex items-center gap-2 text-sm">
-                        <span className="text-gray-600 whitespace-nowrap">Filename:</span>
-                        <input
-                          value={(step.config.filename_pattern as string) || "{trip_id}-{name}.pdf"}
-                          onChange={(e) => updateStep(step.id, { filename_pattern: e.target.value })}
-                          className="flex-1 border border-gray-300 rounded-lg px-2 py-1.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-purple-300"
-                          placeholder="{trip_id}-{name}.pdf"
-                        />
-                      </div>
-
-                      {outputFields.length > 0 && (
-                        <div>
-                          <span className="text-[10px] text-gray-400">Available: </span>
-                          <span className="text-[10px] text-purple-500 font-mono">
-                            {outputFields.slice(0, 15).map((f) => `{${f.key}}`).join("  ")}
-                            {outputFields.length > 15 ? ` +${outputFields.length - 15} more` : ""}
-                          </span>
+                      {/* Filename pattern with clickable pills */}
+                      <div className="space-y-1.5">
+                        <div className="flex items-center gap-2 text-sm">
+                          <span className="text-gray-600 whitespace-nowrap">Filename:</span>
+                          <input
+                            value={(step.config.filename_pattern as string) || "{trip_id}-{name}.pdf"}
+                            onChange={(e) => updateStep(step.id, { filename_pattern: e.target.value })}
+                            className="flex-1 border border-gray-300 rounded-lg px-2 py-1.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-purple-300"
+                            placeholder="{trip_id}-{name}.pdf"
+                          />
                         </div>
-                      )}
+                        {outputFields.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {outputFields.slice(0, 20).map((f) => (
+                              <button
+                                key={f.key}
+                                onClick={() => {
+                                  const current = (step.config.filename_pattern as string) || "{trip_id}-{name}.pdf";
+                                  const cursorTag = `{${f.key}}`;
+                                  updateStep(step.id, { filename_pattern: current.replace(/\.pdf$/, "") + "-" + cursorTag + ".pdf" });
+                                }}
+                                className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-purple-50 text-purple-600 border border-purple-200 hover:bg-purple-100 cursor-pointer"
+                                title={`Add {${f.key}} to filename`}
+                              >
+                                {f.key}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
 
                   {/* ── SAVE config ── */}
                   {step.type === "save" && (
-                    <div className="space-y-2">
+                    <div className="space-y-3">
+                      {/* Save target */}
                       <div className="flex items-center gap-2 text-sm">
-                        <span className="text-gray-600">Save each as</span>
+                        <span className="text-gray-600">Save to</span>
+                        <SearchSelect
+                          value={(step.config.target as string) ?? "downloads"}
+                          options={[
+                            { value: "downloads", label: "Downloads (browser)" },
+                            { value: "google_drive", label: "Google Drive" },
+                            { value: "teams", label: "Microsoft Teams / SharePoint" },
+                          ]}
+                          onChange={(v) => updateStep(step.id, { target: v })}
+                        />
+                      </div>
+
+                      {/* Format */}
+                      <div className="flex items-center gap-2 text-sm">
+                        <span className="text-gray-600">Format</span>
                         <SearchSelect
                           value={(step.config.format as string) ?? "pdf"}
                           options={[
@@ -1452,28 +1531,64 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
                           onChange={(v) => updateStep(step.id, { format: v })}
                         />
                       </div>
-                      <div>
+
+                      {/* File naming pattern */}
+                      <div className="space-y-1.5">
                         <span className="text-xs text-gray-500">File naming pattern:</span>
                         <input
                           type="text"
                           value={(step.config.filename_pattern as string) ?? ""}
                           onChange={(e) => updateStep(step.id, { filename_pattern: e.target.value })}
                           placeholder="{company}-{name}-{trip_id}-{date}.pdf"
-                          className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm font-mono mt-1 focus:outline-none focus:ring-2 focus:ring-amber-300"
+                          className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-amber-300"
                         />
-                        {/* Show available naming fields */}
+                        {/* Clickable pills to insert field placeholders */}
                         {outputFields.length > 0 && (
-                          <div className="mt-1">
-                            <span className="text-[10px] text-gray-400">Available: </span>
-                            <span className="text-[10px] text-amber-600 font-mono">
-                              {outputFields.map((f) => `{${f.key}}`).join("  ")}
-                            </span>
+                          <div className="flex flex-wrap gap-1">
+                            {outputFields.slice(0, 25).map((f) => (
+                              <button
+                                key={f.key}
+                                onClick={() => {
+                                  const current = (step.config.filename_pattern as string) ?? "";
+                                  const ext = `.${(step.config.format as string) || "pdf"}`;
+                                  const base = current.endsWith(ext) ? current.slice(0, -ext.length) : current;
+                                  updateStep(step.id, { filename_pattern: (base ? base + "-" : "") + `{${f.key}}` + ext });
+                                }}
+                                className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 cursor-pointer"
+                                title={`Add {${f.key}} to filename`}
+                              >
+                                {f.key}
+                              </button>
+                            ))}
+                            {outputFields.length > 25 && (
+                              <span className="text-[9px] text-gray-400 self-center">+{outputFields.length - 25} more</span>
+                            )}
                           </div>
                         )}
-                        <p className="text-[10px] text-gray-400 mt-0.5">
-                          Use {"{field_name}"} for dynamic values. E.g. UTESH17-{"{name}"}-{"{trip_id}"}.pdf
-                        </p>
                       </div>
+
+                      {/* Preview button */}
+                      {currentRun?.output_data && currentRun.output_data.length > 0 && (
+                        <button
+                          onClick={() => {
+                            const pattern = (step.config.filename_pattern as string) || `{trip_id}-{name}.${(step.config.format as string) || "pdf"}`;
+                            const files = currentRun.output_data!.slice(0, 50).map((row: Record<string, unknown>) => {
+                              let fn = pattern;
+                              for (const [key, val] of Object.entries(row)) {
+                                fn = fn.replace(`{${key}}`, String(val ?? "").replace(/[^a-zA-Z0-9_\-. ]/g, "").slice(0, 50));
+                              }
+                              fn = fn.replace(/\{[^}]+\}/g, "unknown");
+                              return { filename: fn, data: row };
+                            });
+                            setPreviewFiles(files);
+                            setPreviewIndex(0);
+                          }}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-100 hover:bg-amber-200 text-amber-700 text-xs font-medium rounded-lg border border-amber-300"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                          Preview {Math.min(currentRun.output_data.length, 50)} files
+                        </button>
+                      )}
                     </div>
                   )}
 
@@ -1768,6 +1883,71 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
         </Suspense>
         );
       })()}
+
+      {/* ── File Preview Modal ── */}
+      {previewFiles && previewFiles.length > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setPreviewFiles(null)}>
+          <div className="bg-white rounded-xl shadow-2xl w-[700px] max-h-[80vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
+              <div className="flex items-center gap-3">
+                <h3 className="text-sm font-bold text-gray-800">File Preview</h3>
+                <span className="text-xs text-gray-400">{previewIndex + 1} of {previewFiles.length}</span>
+              </div>
+              <button onClick={() => setPreviewFiles(null)} className="text-gray-400 hover:text-gray-600">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+
+            {/* Filename */}
+            <div className="px-5 py-3 bg-amber-50 border-b border-amber-200">
+              <p className="text-sm font-mono text-amber-800 font-medium">{previewFiles[previewIndex].filename}</p>
+            </div>
+
+            {/* Data preview */}
+            <div className="flex-1 overflow-y-auto px-5 py-3">
+              <table className="w-full text-xs">
+                <tbody>
+                  {Object.entries(previewFiles[previewIndex].data).filter(([, v]) => v !== null && v !== undefined && String(v).trim() !== "").slice(0, 40).map(([key, val]) => (
+                    <tr key={key} className="border-b border-gray-100">
+                      <td className="py-1.5 pr-3 text-gray-500 font-medium whitespace-nowrap align-top">{key}</td>
+                      <td className="py-1.5 text-gray-800 break-all">{typeof val === "string" && val.startsWith("http") ? <a href={val} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">{val}</a> : String(val).slice(0, 200)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Navigation */}
+            <div className="flex items-center justify-between px-5 py-3 border-t border-gray-200 bg-gray-50">
+              <button
+                onClick={() => setPreviewIndex(Math.max(0, previewIndex - 1))}
+                disabled={previewIndex === 0}
+                className="px-3 py-1.5 bg-white border border-gray-300 rounded-lg text-xs font-medium text-gray-600 hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                ← Previous
+              </button>
+              <div className="flex items-center gap-1">
+                {previewFiles.slice(0, 10).map((_, i) => (
+                  <button
+                    key={i}
+                    onClick={() => setPreviewIndex(i)}
+                    className={`w-2 h-2 rounded-full transition-colors ${i === previewIndex ? "bg-amber-500" : "bg-gray-300 hover:bg-gray-400"}`}
+                  />
+                ))}
+                {previewFiles.length > 10 && <span className="text-[9px] text-gray-400 ml-1">+{previewFiles.length - 10}</span>}
+              </div>
+              <button
+                onClick={() => setPreviewIndex(Math.min(previewFiles.length - 1, previewIndex + 1))}
+                disabled={previewIndex >= previewFiles.length - 1}
+                className="px-3 py-1.5 bg-white border border-gray-300 rounded-lg text-xs font-medium text-gray-600 hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                Next →
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Signature Lightbox ── */}
       {expandedImage && (

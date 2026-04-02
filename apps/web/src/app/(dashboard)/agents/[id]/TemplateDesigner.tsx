@@ -75,6 +75,65 @@ function injectSampleValues(
   });
 }
 
+/**
+ * AI auto-mapping: fuzzy-match PDF form field names to data column names.
+ * Normalizes both sides (lowercase, strip underscores/dots/spaces) and finds best matches.
+ */
+function autoMapFields(
+  formFields: PdfFormField[],
+  dataColumns: Array<{ key: string; label: string }>,
+): Record<string, string> {
+  const mappings: Record<string, string> = {};
+  const normalize = (s: string) => s.toLowerCase().replace(/[_.\s-]+/g, "").replace(/[']/g, "");
+
+  // Build normalized lookup for data columns
+  const colIndex = dataColumns.map((c) => ({
+    key: c.key,
+    norm: normalize(c.key),
+    labelNorm: normalize(c.label),
+    parts: c.key.toLowerCase().split(/[_.\s-]+/),
+  }));
+
+  const usedColumns = new Set<string>();
+
+  for (const ff of formFields) {
+    if (ff.type === "signature") continue; // skip signature fields
+    const normName = normalize(ff.name);
+
+    // 1. Exact normalized match on key or label
+    let match = colIndex.find((c) => !usedColumns.has(c.key) && (c.norm === normName || c.labelNorm === normName));
+
+    // 2. Substring containment: form field contains column name or vice versa
+    if (!match) {
+      match = colIndex.find((c) =>
+        !usedColumns.has(c.key) && (normName.includes(c.norm) || c.norm.includes(normName)) && c.norm.length > 2,
+      );
+    }
+
+    // 3. Keyword overlap: split both and find >50% overlap
+    if (!match) {
+      const ffParts = ff.name.toLowerCase().split(/[_.\s-]+/).filter((p) => p.length > 2);
+      let bestScore = 0;
+      for (const col of colIndex) {
+        if (usedColumns.has(col.key)) continue;
+        const overlap = ffParts.filter((p) => col.parts.some((cp) => cp.includes(p) || p.includes(cp))).length;
+        const score = overlap / Math.max(ffParts.length, 1);
+        if (score > 0.5 && score > bestScore) {
+          bestScore = score;
+          match = col;
+        }
+      }
+    }
+
+    if (match) {
+      mappings[ff.name] = match.key;
+      usedColumns.add(match.key);
+    }
+  }
+
+  return mappings;
+}
+
 // ── Main component ──────────────────────────────────────────────
 
 export default function TemplateDesigner({
@@ -152,9 +211,23 @@ export default function TemplateDesigner({
         const schema = tmpl.pdfme_schema;
         const isFormFill = schema?.mode === "form_fill";
 
+        // AI auto-map: if form-fill mode with no existing mappings, fuzzy-match field names
+        let initialMappings = tmpl.field_mappings ?? {};
+        if (isFormFill && schema.form_fields && Object.keys(initialMappings).length === 0) {
+          initialMappings = autoMapFields(schema.form_fields, availableFields);
+          // Persist the auto-mapped fields so they survive refresh
+          if (Object.keys(initialMappings).length > 0) {
+            fetchWithTenant(`/api/workspace/templates/${templateId}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ field_mappings: initialMappings }),
+            }).catch(() => {}); // fire-and-forget
+          }
+        }
+
         flushSync(() => {
           setBasePdfUploaded(!!tmpl.base_pdf_key);
-          setFieldMappings(tmpl.field_mappings ?? {});
+          setFieldMappings(initialMappings);
           setMode(isFormFill ? "form_fill" : "overlay");
           if (isFormFill && schema.form_fields) {
             setFormFields(schema.form_fields);
@@ -318,10 +391,21 @@ export default function TemplateDesigner({
       const result = await res.json();
 
       if (result.mode === "form_fill") {
+        // AI auto-map on fresh upload
+        const autoMapped = autoMapFields(result.form_fields ?? [], availableFields);
+        if (Object.keys(autoMapped).length > 0) {
+          fetchWithTenant(`/api/workspace/templates/${templateId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ field_mappings: autoMapped }),
+          }).catch(() => {});
+        }
+
         // Form-fill mode: show field mapping UI with real PDF preview
         flushSync(() => {
           setMode("form_fill");
           setFormFields(result.form_fields ?? []);
+          setFieldMappings(autoMapped);
           setBasePdfUploaded(true);
           setLoading(false);
         });
