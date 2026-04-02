@@ -20,6 +20,13 @@ import { skillRoutes, agentSkillRoutes } from "./routes/skills.js";
 import { usageRoutes } from "./routes/usage.js";
 import { agentRunRoutes, agentRunDetailRoutes } from "./routes/agentRuns.js";
 import { agentDeployRoutes, companyDeployedAgentsRoute } from "./routes/deploy.js";
+import { agentTemplateRoutes } from "./routes/agentTemplates.js";
+import { knowledgeRoutes } from "./routes/knowledge.js";
+import { tenantRoutes } from "./routes/tenant.js";
+import { uploadRoutes } from "./routes/uploads.js";
+import { toolRoutes } from "./routes/tools.js";
+import memoriesRouter from "./routes/memories.js";
+import { agentWorkspaceRoutes, agentWorkspaceTemplateRoutes } from "./routes/agentWorkspace.js";
 import { requestId } from "./middleware/requestId.js";
 import { auditMiddleware } from "./middleware/audit.js";
 import { errorHandler } from "./middleware/errorHandler.js";
@@ -67,6 +74,14 @@ export function createApp() {
   app.use("/api/agents/:agentId", agentRunRoutes());
   app.use("/api/agent-runs", agentRunDetailRoutes());
 
+  app.use("/api/agent-templates", agentTemplateRoutes());
+  app.use("/api/agents/:agentId/knowledge", knowledgeRoutes());
+  app.use("/api/tenant", tenantRoutes());
+  app.use("/api/uploads", uploadRoutes());
+  app.use("/api/tools", toolRoutes());
+  app.use("/api/memories", memoriesRouter);
+  app.use("/api/agents", agentWorkspaceRoutes());
+  app.use("/api/workspace", agentWorkspaceTemplateRoutes());
   app.use("/api/agents/:agentId", agentDeployRoutes());
   app.use("/api/companies/:companyId/deployed-agents", companyDeployedAgentsRoute());
 

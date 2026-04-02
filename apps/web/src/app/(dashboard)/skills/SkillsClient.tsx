@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
+import { fetchWithTenant } from "@/lib/fetchWithTenant";
 
 interface Skill {
   id: string;
@@ -20,7 +21,7 @@ export function SkillsClient() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/skills");
+      const res = await fetchWithTenant("/api/skills");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setSkills(await res.json());
     } catch (e) {

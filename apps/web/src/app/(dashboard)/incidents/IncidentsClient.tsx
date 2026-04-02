@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { fetchWithTenant } from "@/lib/fetchWithTenant";
 
 interface Department {
   id: string;
@@ -18,6 +19,8 @@ interface Incident {
   departmentName?: string;
   createdAt: string;
   resolvedAt: string | null;
+  incidentId?: string | null;
+  attachmentsRef?: string[] | null;
 }
 
 interface IncidentPage {
@@ -43,6 +46,7 @@ interface FormState {
   description: string;
   severity: string;
   departmentId: string;
+  attachmentKeys: string[];
 }
 
 const EMPTY_FORM: FormState = {
@@ -50,6 +54,7 @@ const EMPTY_FORM: FormState = {
   description: "",
   severity: "medium",
   departmentId: "",
+  attachmentKeys: [],
 };
 
 export function IncidentsClient() {
@@ -62,12 +67,14 @@ export function IncidentsClient() {
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [transitioningId, setTransitioningId] = useState<string | null>(null);
+  const [uploadingFile, setUploadingFile] = useState(false);
+  const [createdIncidentId, setCreatedIncidentId] = useState<string | null>(null);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const deptsRes = await fetch("/api/departments");
+      const deptsRes = await fetchWithTenant("/api/departments");
       if (!deptsRes.ok) throw new Error(`Departments: HTTP ${deptsRes.status}`);
       const depts: Department[] = await deptsRes.json();
       setDepartments(depts);
@@ -75,7 +82,7 @@ export function IncidentsClient() {
       const activeDepts = depts.filter((d) => d.status === "active");
       const results = await Promise.all(
         activeDepts.map(async (dept) => {
-          const res = await fetch(`/api/departments/${dept.id}/incidents?limit=100`);
+          const res = await fetchWithTenant(`/api/departments/${dept.id}/incidents?limit=100`);
           if (!res.ok) return [];
           const page: IncidentPage = await res.json();
           return page.data.map((i) => ({ ...i, departmentName: dept.name }));
@@ -101,6 +108,34 @@ export function IncidentsClient() {
     setShowModal(false);
     setForm(EMPTY_FORM);
     setFormError(null);
+    setCreatedIncidentId(null);
+  }
+
+  async function handleFileUpload(file: File) {
+    setUploadingFile(true);
+    try {
+      const params = new URLSearchParams({
+        filename: file.name,
+        contentType: file.type || "application/octet-stream",
+      });
+      const signedRes = await fetchWithTenant(`/api/uploads/signed-url?${params}`);
+      if (!signedRes.ok) throw new Error("Failed to get upload URL");
+      const { url, key } = await signedRes.json() as { url: string; key: string };
+
+      // Upload directly to MinIO/S3
+      const uploadRes = await fetch(url, {
+        method: "PUT",
+        headers: { "Content-Type": file.type || "application/octet-stream" },
+        body: file,
+      });
+      if (!uploadRes.ok) throw new Error("Upload failed");
+
+      setForm((f) => ({ ...f, attachmentKeys: [...f.attachmentKeys, key] }));
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : "File upload failed");
+    } finally {
+      setUploadingFile(false);
+    }
   }
 
   async function handleCreate(e: React.FormEvent) {
@@ -108,20 +143,23 @@ export function IncidentsClient() {
     setSubmitting(true);
     setFormError(null);
     try {
-      const res = await fetch(`/api/departments/${form.departmentId}/incidents`, {
+      const res = await fetchWithTenant(`/api/departments/${form.departmentId}/incidents`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title: form.title,
           description: form.description,
           severity: form.severity,
+          attachment_keys: form.attachmentKeys.length > 0 ? form.attachmentKeys : undefined,
         }),
       });
       if (!res.ok) {
         const b = await res.json().catch(() => ({}));
         throw new Error((b as { error?: string }).error ?? `HTTP ${res.status}`);
       }
-      closeModal();
+      const created = await res.json() as { incidentId?: string };
+      setCreatedIncidentId(created.incidentId ?? null);
+      setForm(EMPTY_FORM);
       await fetchAll();
     } catch (e) {
       setFormError(e instanceof Error ? e.message : "Failed to create incident");
@@ -133,7 +171,7 @@ export function IncidentsClient() {
   async function handleTransition(incidentId: string, nextStatus: string) {
     setTransitioningId(incidentId);
     try {
-      const res = await fetch(`/api/incidents/${incidentId}`, {
+      const res = await fetchWithTenant(`/api/incidents/${incidentId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: nextStatus }),
@@ -222,6 +260,11 @@ export function IncidentsClient() {
                   <tr key={inc.id} className="hover:bg-gray-50 transition-colors">
                     <td className="px-4 py-3">
                       <div className="font-medium text-gray-900">{inc.title}</div>
+                      {inc.incidentId && (
+                        <div className="text-xs font-mono text-brand-600 font-semibold mt-0.5">
+                          {inc.incidentId}
+                        </div>
+                      )}
                       <div className="text-xs text-gray-400 truncate max-w-xs">
                         {inc.description}
                       </div>
@@ -261,6 +304,22 @@ export function IncidentsClient() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
             <h2 className="text-lg font-semibold text-gray-900 mb-4">New Incident</h2>
+
+            {createdIncidentId && (
+              <div className="mb-4 rounded-lg bg-green-50 border border-green-200 px-4 py-3">
+                <p className="text-sm font-semibold text-green-800">Incident Created</p>
+                <p className="text-lg font-bold text-green-700 mt-1">{createdIncidentId}</p>
+                <button
+                  type="button"
+                  onClick={closeModal}
+                  className="mt-2 px-3 py-1 bg-green-600 hover:bg-green-700 text-white text-sm rounded-lg"
+                >
+                  Close
+                </button>
+              </div>
+            )}
+
+            {!createdIncidentId && (
             <form onSubmit={handleCreate} className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -322,6 +381,58 @@ export function IncidentsClient() {
                     ))}
                 </select>
               </div>
+              {/* File upload */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Attachments (optional)
+                </label>
+                <div
+                  className="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center cursor-pointer hover:border-brand-400 transition-colors"
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const file = e.dataTransfer.files[0];
+                    if (file) handleFileUpload(file);
+                  }}
+                  onClick={() => {
+                    const input = document.createElement("input");
+                    input.type = "file";
+                    input.onchange = (ev) => {
+                      const file = (ev.target as HTMLInputElement).files?.[0];
+                      if (file) handleFileUpload(file);
+                    };
+                    input.click();
+                  }}
+                >
+                  {uploadingFile ? (
+                    <p className="text-sm text-gray-400">Uploading...</p>
+                  ) : (
+                    <p className="text-sm text-gray-400">
+                      Drag & drop a file, or click to select
+                    </p>
+                  )}
+                </div>
+                {form.attachmentKeys.length > 0 && (
+                  <ul className="mt-2 space-y-1">
+                    {form.attachmentKeys.map((key, i) => (
+                      <li key={i} className="flex items-center justify-between text-xs text-gray-600 bg-gray-50 rounded px-2 py-1">
+                        <span className="truncate">{key.split("/").pop()}</span>
+                        <button
+                          type="button"
+                          onClick={() => setForm((f) => ({
+                            ...f,
+                            attachmentKeys: f.attachmentKeys.filter((_, idx) => idx !== i),
+                          }))}
+                          className="ml-2 text-red-400 hover:text-red-600"
+                        >
+                          x
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
               {formError && (
                 <div className="rounded bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
                   {formError}
@@ -337,13 +448,14 @@ export function IncidentsClient() {
                 </button>
                 <button
                   type="submit"
-                  disabled={submitting}
+                  disabled={submitting || uploadingFile}
                   className="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium rounded-lg disabled:opacity-50"
                 >
                   {submitting ? "Creating..." : "Create"}
                 </button>
               </div>
             </form>
+            )}
           </div>
         </div>
       )}

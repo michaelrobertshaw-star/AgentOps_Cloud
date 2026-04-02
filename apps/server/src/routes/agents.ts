@@ -1,12 +1,13 @@
 import { Router } from "express";
 import { z } from "zod";
 import { eq, and } from "drizzle-orm";
-import { agents, departments } from "@agentops/db";
+import { agents, departments, agentRuns, notifications } from "@agentops/db";
 import { authenticate } from "../middleware/auth.js";
 import { requirePermission } from "../middleware/rbac.js";
 import { validate } from "../middleware/validate.js";
 import { getDb } from "../lib/db.js";
 import { NotFoundError, ConflictError, ValidationError } from "../lib/errors.js";
+import { writeAuditLog } from "../services/auditService.js";
 import type { AgentStatus } from "@agentops/shared";
 
 const createAgentSchema = z.object({
@@ -37,6 +38,7 @@ const updateAgentSchema = z.object({
   version: z.string().max(50).nullable().optional(),
   description: z.string().max(2000).nullable().optional(),
   departmentId: z.string().uuid().nullable().optional(),
+  config: z.record(z.unknown()).optional(),
   status: z
     .enum(["draft", "testing", "tested", "active", "degraded", "paused", "stopped", "error", "archived", "deployed", "disabled"])
     .optional(),
@@ -232,9 +234,16 @@ export function agentRoutes() {
           }
         }
 
+        // Merge config if provided (don't overwrite existing keys)
+        const updateData = { ...req.body, updatedAt: new Date() };
+        if (req.body.config) {
+          const existingConfig = (current.config as Record<string, unknown>) ?? {};
+          updateData.config = { ...existingConfig, ...req.body.config };
+        }
+
         const [updated] = await db
           .update(agents)
-          .set({ ...req.body, updatedAt: new Date() })
+          .set(updateData)
           .where(and(eq(agents.id, id), eq(agents.companyId, req.companyId!)))
           .returning();
 
@@ -370,6 +379,81 @@ export function agentRoutes() {
         });
 
         res.json(updated);
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // POST /agents/:id/stop — stop an active/running/degraded agent
+  router.post(
+    "/:id/stop",
+    authenticate(),
+    requirePermission("agent:manage"),
+    validate(z.object({ reason: z.string().min(1, "reason is required") })),
+    async (req, res, next) => {
+      try {
+        const db = getDb();
+        const id = req.params.id as string;
+        const companyId = req.companyId!;
+        const userId = req.userId!;
+        const { reason } = req.body as { reason: string };
+
+        const current = await db.query.agents.findFirst({
+          where: and(eq(agents.id, id), eq(agents.companyId, companyId)),
+        });
+        if (!current) throw new NotFoundError("Agent", id);
+
+        const stoppableStatuses: AgentStatus[] = ["active", "running" as AgentStatus, "degraded", "paused"];
+        if (!stoppableStatuses.includes(current.status as AgentStatus)) {
+          throw new ValidationError(
+            `Agent cannot be stopped from status '${current.status}'. Must be active, running, degraded, or paused.`,
+          );
+        }
+
+        // Mark agent as stopped
+        const [updated] = await db
+          .update(agents)
+          .set({ status: "stopped", updatedAt: new Date() })
+          .where(and(eq(agents.id, id), eq(agents.companyId, companyId)))
+          .returning();
+
+        // Cancel any running agent runs for this agent
+        await db
+          .update(agentRuns)
+          .set({ status: "cancelled", completedAt: new Date() })
+          .where(and(eq(agentRuns.agentId, id), eq(agentRuns.companyId, companyId)));
+
+        // Write dedicated audit log entry for stop action (Task 14)
+        await writeAuditLog({
+          companyId,
+          actorType: "user",
+          actorId: userId,
+          action: "agent.stopped",
+          resourceType: "agent",
+          resourceId: id,
+          departmentId: current.departmentId ?? undefined,
+          context: { reason, agentName: current.name },
+          changes: {
+            before: { status: current.status },
+            after: { status: "stopped", reason },
+          },
+          outcome: "success",
+          riskLevel: "medium",
+        });
+
+        // Create in-app notification for the ops team (Task 15)
+        await db.insert(notifications).values({
+          companyId,
+          type: "agent_stopped",
+          title: `Agent "${current.name}" was stopped`,
+          message: `Agent ${current.name} was stopped by user ${userId}. Reason: ${reason}`,
+          actorUserId: userId,
+          resourceType: "agent",
+          resourceId: id,
+        }).catch(() => {/* non-critical, don't fail the stop action */});
+
+        res.json({ message: "Agent stopped", agent: updated });
       } catch (err) {
         next(err);
       }

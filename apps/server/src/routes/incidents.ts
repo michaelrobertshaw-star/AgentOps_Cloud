@@ -32,7 +32,18 @@ const createIncidentSchema = z.object({
   severity: z.enum(["critical", "high", "medium", "low"]),
   taskId: z.string().uuid().optional(),
   agentId: z.string().uuid().optional(),
+  attachment_keys: z.array(z.string()).optional(), // S3 keys from signed upload (Task 17/18)
 });
+
+/**
+ * Generate incident ID: INC-{YYYYMMDD}-{random 4 digit} (Task 19)
+ */
+function generateIncidentId(): string {
+  const now = new Date();
+  const ymd = now.toISOString().slice(0, 10).replace(/-/g, "");
+  const rand = Math.floor(1000 + Math.random() * 9000);
+  return `INC-${ymd}-${rand}`;
+}
 
 const updateIncidentSchema = z.object({
   title: z.string().min(1).max(500).optional(),
@@ -72,6 +83,7 @@ export function incidentDeptRoutes() {
         });
         if (!dept) throw new NotFoundError("Department", deptId);
 
+        const incidentIdCode = generateIncidentId();
         const [incident] = await db
           .insert(incidents)
           .values({
@@ -83,6 +95,8 @@ export function incidentDeptRoutes() {
             status: "open",
             taskId: req.body.taskId ?? null,
             agentId: req.body.agentId ?? null,
+            incidentId: incidentIdCode,
+            attachmentsRef: req.body.attachment_keys ?? [],
           })
           .returning();
 

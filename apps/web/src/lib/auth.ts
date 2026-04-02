@@ -36,6 +36,19 @@ export async function requireSession(): Promise<JwtPayload> {
   return session;
 }
 
+/**
+ * requireAdmin — verifies the session AND that the caller holds the
+ * platform-level `oneops_admin` role.  Regular customer users are
+ * redirected to the dashboard instead of seeing an error page.
+ */
+export async function requireAdmin(): Promise<JwtPayload> {
+  const session = await requireSession();
+  if (!session.roles?.includes("oneops_admin")) {
+    redirect("/dashboard");
+  }
+  return session;
+}
+
 export interface LoginResult {
   user: { id: string; email: string; name: string; role: string };
   accessToken: string;

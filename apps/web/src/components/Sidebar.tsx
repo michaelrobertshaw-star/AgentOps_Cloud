@@ -11,7 +11,9 @@ const NAV_ITEMS = [
   { href: "/skills", label: "Skills", icon: "⚙" },
   { href: "/tasks", label: "Tasks", icon: "◫" },
   { href: "/incidents", label: "Incidents", icon: "⚡" },
-  { href: "/audit", label: "Audit Log", icon: "◧" },
+  { href: "/audit-logs", label: "Audit Logs", icon: "◧" },
+  { href: "/layer-library", label: "Layer Library", icon: "▦" },
+  { href: "/marketplace", label: "Marketplace", icon: "⊕" },
   { href: "/usage", label: "Usage", icon: "◑" },
   { href: "/admin/companies", label: "Admin", icon: "⊛", requiredRole: "oneops_admin" as UserRole },
 ];

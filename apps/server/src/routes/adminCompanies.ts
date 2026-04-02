@@ -42,6 +42,10 @@ const ALGORITHM = "aes-256-gcm";
 function getEncryptionKey(): Buffer {
   const raw = process.env.CONNECTOR_ENCRYPTION_KEY ?? "";
   if (raw.length === 64) return Buffer.from(raw, "hex");
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("FATAL: CONNECTOR_ENCRYPTION_KEY must be a 64-char hex string in production.");
+  }
+  console.warn("[SECURITY] CONNECTOR_ENCRYPTION_KEY not set — using weak fallback. NOT safe for production.");
   const padded = raw.padEnd(64, "0").slice(0, 64);
   return Buffer.from(padded, "hex");
 }
@@ -95,7 +99,7 @@ const updateSettingsSchema = z.object({
 const inviteUserSchema = z.object({
   email: z.string().email(),
   name: z.string().min(1).max(255),
-  role: z.enum(["oneops_admin", "customer_admin", "customer_user"]).default("oneops_admin"),
+  role: z.enum(["oneops_admin", "customer_admin", "customer_user"]).default("customer_user"),
   password: z.string().min(8),
 });
 

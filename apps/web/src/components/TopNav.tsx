@@ -1,4 +1,5 @@
-import { CompanySwitcher } from "./CompanySwitcher";
+import { TenantBrandHeader } from "./BrandingApplier";
+import { TenantSwitcher } from "./TenantSwitcher";
 import { logoutAction } from "@/app/(auth)/logout/actions";
 import type { JwtPayload } from "@agentops/shared";
 
@@ -7,11 +8,13 @@ interface Props {
 }
 
 export function TopNav({ session }: Props) {
+  const isAdmin = session.roles?.includes("oneops_admin") ?? false;
+
   return (
     <header className="h-14 shrink-0 flex items-center justify-between bg-white border-b border-gray-200 px-4">
       <div className="flex items-center gap-4">
-        <span className="text-lg font-bold text-gray-900">AgentOps</span>
-        <CompanySwitcher session={session} />
+        <TenantBrandHeader />
+        <TenantSwitcher isAdmin={isAdmin} currentCompanyId={session.company_id} />
       </div>
 
       <div className="flex items-center gap-3">

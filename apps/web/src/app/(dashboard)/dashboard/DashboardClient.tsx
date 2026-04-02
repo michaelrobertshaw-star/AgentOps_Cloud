@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { fetchWithTenant } from "@/lib/fetchWithTenant";
 
 interface DashboardData {
   company: { id: string; name: string; displayName: string };
@@ -48,7 +49,7 @@ export function DashboardClient() {
 
   const fetchDashboard = useCallback(async () => {
     try {
-      const res = await fetch("/api/companies/me/dashboard");
+      const res = await fetchWithTenant("/api/companies/me/dashboard");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = (await res.json()) as DashboardData;
       setData(json);
@@ -59,7 +60,7 @@ export function DashboardClient() {
       const activeDepts = json.departments.filter((d) => d.status === "active");
       const incidentResults = await Promise.all(
         activeDepts.map(async (dept) => {
-          const r = await fetch(`/api/departments/${dept.id}/incidents?limit=500`);
+          const r = await fetchWithTenant(`/api/departments/${dept.id}/incidents?limit=500`);
           if (!r.ok) return [];
           const page: IncidentPage = await r.json();
           return page.data;

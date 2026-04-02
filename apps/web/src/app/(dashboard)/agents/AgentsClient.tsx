@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
+import { fetchWithTenant } from "@/lib/fetchWithTenant";
 
 interface Department {
   id: string;
@@ -21,34 +22,19 @@ interface Agent {
   createdAt: string;
 }
 
-const AGENT_TYPES = ["worker", "reviewer", "monitor"];
-
-interface FormState {
-  name: string;
-  type: string;
-  description: string;
-  departmentId: string;
-}
-
-const EMPTY_FORM: FormState = { name: "", type: "worker", description: "", departmentId: "" };
-
 export function AgentsClient() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showModal, setShowModal] = useState(false);
-  const [form, setForm] = useState<FormState>(EMPTY_FORM);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const [agentsRes, deptsRes] = await Promise.all([
-        fetch("/api/agents"),
-        fetch("/api/departments"),
+        fetchWithTenant("/api/agents"),
+        fetchWithTenant("/api/departments"),
       ]);
       if (!agentsRes.ok) throw new Error(`Agents: HTTP ${agentsRes.status}`);
       setAgents(await agentsRes.json());
@@ -63,41 +49,6 @@ export function AgentsClient() {
   useEffect(() => {
     fetchAll();
   }, [fetchAll]);
-
-  function closeModal() {
-    setShowModal(false);
-    setForm(EMPTY_FORM);
-    setFormError(null);
-  }
-
-  async function handleCreate(e: React.FormEvent) {
-    e.preventDefault();
-    setSubmitting(true);
-    setFormError(null);
-    try {
-      const body: Record<string, unknown> = {
-        name: form.name,
-        type: form.type,
-        description: form.description || undefined,
-        departmentId: form.departmentId || undefined,
-      };
-      const res = await fetch("/api/agents", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const b = await res.json().catch(() => ({}));
-        throw new Error((b as { error?: string }).error ?? `HTTP ${res.status}`);
-      }
-      closeModal();
-      await fetchAll();
-    } catch (e) {
-      setFormError(e instanceof Error ? e.message : "Failed to create agent");
-    } finally {
-      setSubmitting(false);
-    }
-  }
 
   if (loading) {
     return (
@@ -115,12 +66,12 @@ export function AgentsClient() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Agents</h1>
-        <button
-          onClick={() => setShowModal(true)}
+        <Link
+          href="/agents/new"
           className="inline-flex items-center px-3 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium rounded-lg transition-colors"
         >
           + New Agent
-        </button>
+        </Link>
       </div>
 
       {error ? (
@@ -198,90 +149,6 @@ export function AgentsClient() {
         </div>
       )}
 
-      {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">New Agent</h2>
-            <form onSubmit={handleCreate} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Name <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={form.name}
-                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Type <span className="text-red-500">*</span>
-                </label>
-                <select
-                  value={form.type}
-                  onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
-                >
-                  {AGENT_TYPES.map((t) => (
-                    <option key={t} value={t}>
-                      {t}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Department</label>
-                <select
-                  value={form.departmentId}
-                  onChange={(e) => setForm((f) => ({ ...f, departmentId: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
-                >
-                  <option value="">— None —</option>
-                  {departments
-                    .filter((d) => d.status === "active")
-                    .map((d) => (
-                      <option key={d.id} value={d.id}>
-                        {d.name}
-                      </option>
-                    ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
-                <textarea
-                  value={form.description}
-                  onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-                  rows={3}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
-                />
-              </div>
-              {formError && (
-                <div className="rounded bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
-                  {formError}
-                </div>
-              )}
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={closeModal}
-                  className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  className="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium rounded-lg disabled:opacity-50"
-                >
-                  {submitting ? "Creating..." : "Create"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

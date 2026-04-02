@@ -4,6 +4,9 @@ import { jwtVerify } from "jose";
 
 const PUBLIC_PATHS = ["/login", "/register"];
 
+// Routes that require the platform-level oneops_admin role
+const ADMIN_PATHS = ["/admin"];
+
 function getJwtSecret(): Uint8Array {
   const secret = process.env.JWT_SECRET ?? "dev-jwt-secret-change-in-production";
   return new TextEncoder().encode(secret);
@@ -39,10 +42,20 @@ export async function middleware(request: NextRequest) {
   }
 
   try {
-    await jwtVerify(token, getJwtSecret(), {
+    const { payload } = await jwtVerify(token, getJwtSecret(), {
       issuer: process.env.JWT_ISSUER ?? "agentops.cloud",
       audience: process.env.JWT_AUDIENCE ?? "agentops-api",
     });
+
+    // Enforce role-based access on admin routes
+    if (ADMIN_PATHS.some((p) => pathname.startsWith(p))) {
+      const roles = (payload as { roles?: string[] }).roles ?? [];
+      if (!roles.includes("oneops_admin")) {
+        // Redirect non-admins to dashboard instead of exposing admin UI
+        return NextResponse.redirect(new URL("/dashboard", request.url));
+      }
+    }
+
     const response = NextResponse.next();
     response.headers.set("x-pathname", pathname);
     return response;

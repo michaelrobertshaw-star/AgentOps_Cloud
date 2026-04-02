@@ -1,0 +1,291 @@
+{
+  "master": {
+    "tasks": [
+      {
+        "id": "1",
+        "title": "Add Zod schema for skill content",
+        "description": "Define a Zod schema for the skill content, including required fields like 'instructions'.",
+        "details": "Use the Zod library to create a schema object that validates the skill content YAML. The schema should include fields like persona, instructions, tools, and constraints, with appropriate validation rules.",
+        "testStrategy": "Write unit tests to ensure the schema correctly validates valid and invalid skill content YAML.",
+        "priority": "high",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-03-31T04:06:47.122Z"
+      },
+      {
+        "id": "2",
+        "title": "Map js-yaml errors to friendly messages",
+        "description": "Create a function to map raw js-yaml error messages to user-friendly error messages.",
+        "details": "Implement a function that takes a js-yaml error object and returns a human-readable error message. The function should handle common error types like missing required fields, indentation errors, and duplicate keys.",
+        "testStrategy": "Write unit tests to ensure the error mapper function correctly translates various js-yaml error scenarios.",
+        "priority": "high",
+        "dependencies": [
+          "1"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-03-31T04:06:47.127Z"
+      },
+      {
+        "id": "3",
+        "title": "Update UI template with required field placeholders and hints",
+        "description": "Enhance the skill YAML editor UI to provide helpful placeholders and hints for required fields.",
+        "details": "Update the skill YAML editor UI to include pre-populated placeholder text for the required fields (e.g., 'Enter a description of what this agent should do'). Also, add inline hints to explain the purpose of each field.",
+        "testStrategy": "Manually test the skill YAML editor to ensure the placeholders and hints are displayed correctly and provide a good user experience.",
+        "priority": "high",
+        "dependencies": [
+          "1",
+          "2"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-03-31T04:06:47.129Z"
+      },
+      {
+        "id": "4",
+        "title": "Add server-side validation returning structured errors",
+        "description": "Implement server-side validation for the skill content, returning structured error responses.",
+        "details": "Update the server-side skill creation/update endpoints to validate the incoming skill content against the Zod schema. If the content is invalid, return a structured error response with details about the specific validation failures.",
+        "testStrategy": "Write integration tests to ensure the server-side validation is working as expected, including testing various invalid skill content scenarios.",
+        "priority": "high",
+        "dependencies": [
+          "1",
+          "2",
+          "3"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-03-31T04:06:47.132Z"
+      },
+      {
+        "id": "5",
+        "title": "Build 3 demo agent templates with skills and prompts",
+        "description": "Create three fully configured agent templates for the demo: Dispatch Agent, Booking Agent, and QA Agent.",
+        "details": "Implement the three agent templates, each with a unique set of skills and a default system prompt. Ensure the templates are seeded in the database and can be assigned to new agents.",
+        "testStrategy": "Manually test each agent template by assigning it to a new agent and verifying the agent can be executed successfully.",
+        "priority": "high",
+        "dependencies": [
+          "1"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-03-31T04:06:47.134Z"
+      },
+      {
+        "id": "6",
+        "title": "Wire agent run trigger button in admin UI",
+        "description": "Add a button in the admin UI to trigger the execution of an agent.",
+        "details": "Implement the UI logic to allow an admin user to trigger the execution of an agent. This should include a button on the agent detail page that, when clicked, initiates the agent run process.",
+        "testStrategy": "Manually test the agent run trigger button by clicking it and verifying that the agent run is initiated successfully.",
+        "priority": "high",
+        "dependencies": [
+          "5"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-03-31T04:06:47.142Z"
+      },
+      {
+        "id": "7",
+        "title": "Implement BullMQ persistent job queue for agent runs",
+        "description": "Integrate BullMQ to create a persistent job queue for agent runs, ensuring in-flight jobs survive server restarts.",
+        "details": "Set up a BullMQ queue and worker process to handle agent runs. When a new agent run is triggered, enqueue the job in the BullMQ queue. The worker process should then pick up the job, execute the agent run, and update the run status in the database. Implement retry logic and a dead-letter queue to handle failed runs.",
+        "testStrategy": "Write integration tests to ensure the BullMQ queue and worker process are functioning correctly, including testing server restarts and failed runs.",
+        "priority": "high",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-03-31T04:06:47.143Z"
+      },
+      {
+        "id": "8",
+        "title": "Add run status polling/SSE to admin agent detail page",
+        "description": "Implement real-time updates to the agent run status in the admin UI, using either polling or server-sent events (SSE).",
+        "details": "Update the admin agent detail page to display the current status of the agent run. This can be achieved either through regular polling of the agent run status or by using server-sent events to receive real-time updates from the server.",
+        "testStrategy": "Manually test the agent run status updates, verifying that the UI reflects the correct status changes in a timely manner.",
+        "priority": "high",
+        "dependencies": [
+          "7"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-03-31T04:06:47.145Z"
+      },
+      {
+        "id": "9",
+        "title": "Wire tenant branding (color, logo) into customer dashboard on login",
+        "description": "Fetch and apply the tenant's branding (primary color and logo) to the customer dashboard upon login.",
+        "details": "Implement an API endpoint that returns the tenant's branding configuration (primary color and logo). When a customer user logs in, fetch this data and apply the branding styles to the customer dashboard UI.",
+        "testStrategy": "Manually test the customer dashboard by logging in as different tenants and verifying that the branding is correctly applied in each case.",
+        "priority": "high",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-03-31T04:06:47.146Z"
+      },
+      {
+        "id": "10",
+        "title": "Verify all customer dashboard API routes enforce tenant scoping",
+        "description": "Ensure that all API routes serving data for the customer dashboard enforce tenant-level scoping.",
+        "details": "Review all API routes that serve data for the customer dashboard and confirm that the responses are properly scoped to the requesting user's tenant. This may involve adding tenant ID filters to database queries or other tenant-level access control measures.",
+        "testStrategy": "Write integration tests to verify that users from one tenant cannot access data belonging to another tenant.",
+        "priority": "high",
+        "dependencies": [
+          "9"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-03-31T04:06:47.147Z"
+      },
+      {
+        "id": "11",
+        "title": "Add tenant switcher to admin dashboard for demo purposes",
+        "description": "Implement a tenant switcher in the admin dashboard to easily toggle between different tenant views during a demo.",
+        "details": "Add a tenant switcher UI element (e.g., a dropdown) to the admin dashboard that allows the user to select a different tenant and view the corresponding data and branding.",
+        "testStrategy": "Manually test the tenant switcher by verifying that the admin dashboard correctly updates to reflect the selected tenant's data and branding.",
+        "priority": "medium",
+        "dependencies": [
+          "9",
+          "10"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-03-31T04:06:47.147Z"
+      },
+      {
+        "id": "12",
+        "title": "Wire stop-agent button to POST /api/agents/:id/stop",
+        "description": "Implement the UI and API logic to allow a customer to stop a running agent.",
+        "details": "Add a 'Stop' button to the agent detail page in the customer dashboard. When the button is clicked, it should trigger a POST request to the /api/agents/:id/stop endpoint, which will cancel the agent run.",
+        "testStrategy": "Manually test the stop-agent functionality by triggering a run, then clicking the stop button and verifying that the run is successfully cancelled.",
+        "priority": "high",
+        "dependencies": [
+          "7"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-03-31T04:06:47.148Z"
+      },
+      {
+        "id": "13",
+        "title": "Implement stop logic in job queue",
+        "description": "Implement the logic to cancel an agent run when the stop API is called.",
+        "details": "When the /api/agents/:id/stop endpoint is called, the server should cancel the corresponding job in the BullMQ queue. This may involve marking the job as 'cancelled' or removing it from the queue entirely.",
+        "testStrategy": "Write integration tests to ensure that stopping an agent run correctly cancels the job in the BullMQ queue.",
+        "priority": "high",
+        "dependencies": [
+          "7",
+          "12"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-03-31T04:06:47.149Z"
+      },
+      {
+        "id": "14",
+        "title": "Add audit log entry for stop actions",
+        "description": "Create an audit log entry when a customer stops an agent run.",
+        "details": "When a customer stops an agent run, add an entry to the audit log table with details about the stop action, including the user, timestamp, and reason (if provided).",
+        "testStrategy": "Manually test the stop-agent functionality and verify that the corresponding audit log entry is created.",
+        "priority": "medium",
+        "dependencies": [
+          "12",
+          "13"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-03-31T04:06:47.149Z"
+      },
+      {
+        "id": "15",
+        "title": "Add in-app notification to ops team on stop",
+        "description": "Send an in-app notification to the internal operations team when a customer stops an agent run.",
+        "details": "Implement a mechanism to send an in-app notification to the operations team when a customer stops an agent run. This could involve a real-time update in the admin dashboard or a notification in a dedicated 'Notifications' area.",
+        "testStrategy": "Manually test the stop-agent functionality and verify that the operations team receives the expected notification.",
+        "priority": "medium",
+        "dependencies": [
+          "14"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-03-31T04:06:47.150Z"
+      },
+      {
+        "id": "16",
+        "title": "Implement signed URL upload endpoint for attachments",
+        "description": "Create an API endpoint that generates pre-signed URLs for uploading attachments to S3/MinIO.",
+        "details": "Implement a server-side API endpoint that generates pre-signed URLs for uploading files to the S3 or MinIO storage service. The client can then use these URLs to directly upload the files, without exposing the storage credentials.",
+        "testStrategy": "Write integration tests to ensure the signed URL endpoint is working correctly and that the uploaded files are accessible in the storage service.",
+        "priority": "high",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-03-31T04:06:47.151Z"
+      },
+      {
+        "id": "17",
+        "title": "Wire file upload to issue report form",
+        "description": "Integrate the signed URL upload functionality into the customer issue report form.",
+        "details": "Update the customer issue report form to include a file upload field. When the user selects a file to upload, use the signed URL API endpoint to obtain a pre-signed URL, and then upload the file directly to the storage service using the provided URL.",
+        "testStrategy": "Manually test the issue report form by uploading various file types and verifying that the attachments are successfully saved and visible in the admin view.",
+        "priority": "high",
+        "dependencies": [
+          "16"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-03-31T04:06:47.151Z"
+      },
+      {
+        "id": "18",
+        "title": "Ensure issue appears in both customer and admin views",
+        "description": "Implement the logic to display the submitted issue report in both the customer and admin dashboards.",
+        "details": "When a customer submits an issue report, ensure that the issue is visible in the customer's 'My Issues' list, as well as in the admin 'Requests Queue' view. This may involve updating the database schema and API endpoints to support this functionality.",
+        "testStrategy": "Manually test the issue report flow by submitting an issue as a customer and verifying that it appears correctly in both the customer and admin dashboards.",
+        "priority": "high",
+        "dependencies": [
+          "17"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-03-31T04:06:47.152Z"
+      },
+      {
+        "id": "19",
+        "title": "Generate and display incident ID",
+        "description": "Implement the generation and display of a unique incident ID for each submitted issue report.",
+        "details": "When a customer submits an issue report, generate a unique incident ID and associate it with the issue. Display this incident ID in both the customer and admin views of the issue report.",
+        "testStrategy": "Manually test the issue report flow by submitting multiple issues and verifying that each one has a unique incident ID displayed correctly.",
+        "priority": "medium",
+        "dependencies": [
+          "18"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-03-31T04:06:47.152Z"
+      },
+      {
+        "id": "20",
+        "title": "Build audit log UI page",
+        "description": "Implement the admin UI page for viewing the platform's audit log.",
+        "details": "Create a new page in the admin dashboard that displays the platform's audit log. This page should include filtering options (by tenant, actor, action type, date range) and pagination. The audit log entries should be fetched from the server-side API endpoint.",
+        "testStrategy": "Manually test the audit log page by applying various filters and verifying that the displayed entries match the expected results.",
+        "priority": "high",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-03-31T04:06:47.153Z"
+      }
+    ],
+    "metadata": {
+      "version": "1.0.0",
+      "lastModified": "2026-03-31T04:06:47.153Z",
+      "taskCount": 20,
+      "completedCount": 20,
+      "tags": [
+        "master"
+      ]
+    }
+  }
+}

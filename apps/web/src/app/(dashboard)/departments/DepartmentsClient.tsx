@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { fetchWithTenant } from "@/lib/fetchWithTenant";
 
 interface Department {
   id: string;
@@ -25,7 +26,7 @@ export function DepartmentsClient() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/departments");
+      const res = await fetchWithTenant("/api/departments");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setDepartments(await res.json());
     } catch (e) {
@@ -51,7 +52,7 @@ export function DepartmentsClient() {
     setSubmitting(true);
     setFormError(null);
     try {
-      const res = await fetch("/api/departments", {
+      const res = await fetchWithTenant("/api/departments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: formName, description: formDesc || undefined }),

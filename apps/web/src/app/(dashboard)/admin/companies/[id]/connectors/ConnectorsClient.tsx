@@ -3,25 +3,48 @@
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 
-const CONNECTOR_TYPES = ["claude_api", "claude_browser", "webhook", "http_get", "minio_storage"] as const;
+const CONNECTOR_TYPES = [
+  "claude_api", "claude_browser", "aws_bedrock", "gcp_vertex",
+  "webhook", "http_get", "minio_storage",
+  "postgres_db", "rest_api", "vector_db", "pdf_docs",
+  "replicate", "modal", "mcp_server",
+] as const;
 type ConnectorType = (typeof CONNECTOR_TYPES)[number];
 
 /** Secret field keys expected per connector type */
 const SECRET_FIELDS: Record<ConnectorType, string[]> = {
   claude_api: ["api_key"],
   claude_browser: ["api_key"],
+  aws_bedrock: ["access_key_id", "secret_access_key"],
+  gcp_vertex: ["service_account_json"],
   webhook: ["secret"],
   http_get: ["api_key"],
   minio_storage: ["access_key", "secret_key"],
+  postgres_db: ["connection_string"],
+  rest_api: ["api_key", "secret_key"],
+  vector_db: ["api_key"],
+  pdf_docs: [],
+  replicate: ["api_key"],
+  modal: ["api_key"],
+  mcp_server: [],
 };
 
 /** Config field keys expected per connector type */
 const CONFIG_FIELDS: Record<ConnectorType, string[]> = {
   claude_api: ["model"],
   claude_browser: ["model"],
+  aws_bedrock: ["model", "region"],
+  gcp_vertex: ["model", "project_id", "location"],
   webhook: ["url"],
   http_get: ["url"],
   minio_storage: ["endpoint", "bucket"],
+  postgres_db: ["database_name"],
+  rest_api: ["base_url", "auth_type"],
+  vector_db: ["endpoint"],
+  pdf_docs: [],
+  replicate: ["model"],
+  modal: ["model"],
+  mcp_server: ["endpoint", "transport", "tools"],
 };
 
 interface Connector {
@@ -58,9 +81,18 @@ function TypeBadge({ type }: { type: string }) {
   const colors: Record<string, string> = {
     claude_api: "bg-purple-100 text-purple-700",
     claude_browser: "bg-indigo-100 text-indigo-700",
-    webhook: "bg-blue-100 text-blue-700",
+    aws_bedrock: "bg-amber-100 text-amber-700",
+    gcp_vertex: "bg-blue-100 text-blue-700",
+    webhook: "bg-cyan-100 text-cyan-700",
     http_get: "bg-green-100 text-green-700",
     minio_storage: "bg-orange-100 text-orange-700",
+    postgres_db: "bg-sky-100 text-sky-700",
+    rest_api: "bg-teal-100 text-teal-700",
+    vector_db: "bg-violet-100 text-violet-700",
+    pdf_docs: "bg-rose-100 text-rose-700",
+    replicate: "bg-lime-100 text-lime-700",
+    modal: "bg-fuchsia-100 text-fuchsia-700",
+    mcp_server: "bg-emerald-100 text-emerald-700",
   };
   return (
     <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${colors[type] ?? "bg-gray-100 text-gray-600"}`}>
@@ -339,12 +371,14 @@ export function ConnectorsClient({ companyId }: { companyId: string }) {
         type: editingConnector.type,
         name: editingConnector.name,
         description: editingConnector.description ?? "",
-        isDefault: editingConnector.isDefault,
+        isDefault: Boolean(editingConnector.isDefault),
         config: Object.fromEntries(
           CONFIG_FIELDS[editingConnector.type].map((k) => [k, String((editingConnector.config as Record<string, unknown>)[k] ?? "")]),
         ),
+        // Secrets: always start blank in edit mode — masked values from API are useless
+        // User leaves blank to keep existing, or types new value to replace
         secrets: Object.fromEntries(
-          SECRET_FIELDS[editingConnector.type].map((k) => [k, editingConnector.secrets[k] ?? ""]),
+          SECRET_FIELDS[editingConnector.type].map((k) => [k, ""]),
         ),
       }
     : EMPTY_FORM;
@@ -377,7 +411,7 @@ export function ConnectorsClient({ companyId }: { companyId: string }) {
       )}
 
       {/* Connector list */}
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
+      <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto shadow-sm">
         {loading ? (
           <div className="p-8 text-center text-gray-400 animate-pulse">Loading...</div>
         ) : connectorList.length === 0 ? (
@@ -402,30 +436,30 @@ export function ConnectorsClient({ companyId }: { companyId: string }) {
                     {connector.description && <p className="text-xs text-gray-400 mt-0.5">{connector.description}</p>}
                   </td>
                   <td className="px-4 py-3"><TypeBadge type={connector.type} /></td>
-                  <td className="px-4 py-3 text-xs text-gray-500 font-mono">
+                  <td className="px-4 py-3 text-xs text-gray-500 font-mono max-w-[150px]">
                     {Object.entries(connector.config ?? {}).map(([k, v]) => (
-                      <div key={k}><span className="text-gray-400">{k}:</span> {String(v)}</div>
+                      <div key={k} className="truncate" title={`${k}: ${String(v)}`}><span className="text-gray-400">{k}:</span> {String(v)}</div>
                     ))}
                   </td>
-                  <td className="px-4 py-3 text-xs text-gray-500 font-mono">
+                  <td className="px-4 py-3 text-xs text-gray-500 font-mono max-w-[120px]">
                     {Object.entries(connector.secrets ?? {}).map(([k, v]) => (
-                      <div key={k}><span className="text-gray-400">{k}:</span> {v}</div>
+                      <div key={k} className="truncate" title={`${k}: ${v}`}><span className="text-gray-400">{k}:</span> {String(v).slice(-8)}</div>
                     ))}
                   </td>
                   <td className="px-4 py-3 text-center">
                     {connector.isDefault && <span className="text-green-600 text-xs font-semibold">✓</span>}
                   </td>
-                  <td className="px-4 py-3 text-right">
-                    <div className="flex items-center justify-end gap-3">
+                  <td className="px-4 py-3 text-right whitespace-nowrap">
+                    <div className="flex items-center justify-end gap-2">
                       <button
                         onClick={() => startEdit(connector)}
-                        className="text-xs text-brand-600 hover:text-brand-800 font-medium"
+                        className="px-3 py-1 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors"
                       >
                         Edit
                       </button>
                       <button
                         onClick={() => setDeletingId(connector.id)}
-                        className="text-xs text-red-500 hover:text-red-700 font-medium"
+                        className="px-3 py-1 text-xs font-medium text-white bg-red-500 hover:bg-red-700 rounded-md transition-colors"
                       >
                         Delete
                       </button>

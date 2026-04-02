@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { fetchWithTenant } from "@/lib/fetchWithTenant";
 
 interface Agent {
   id: string;
@@ -19,7 +20,7 @@ export function DeployedAgentsPanelClient() {
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch("/api/agents?status=deployed");
+        const res = await fetchWithTenant("/api/agents?status=deployed");
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = (await res.json()) as Agent[];
         setAgents(data);

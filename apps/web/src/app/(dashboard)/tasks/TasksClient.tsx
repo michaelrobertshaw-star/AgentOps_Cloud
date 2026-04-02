@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
+import { fetchWithTenant } from "@/lib/fetchWithTenant";
 
 interface Department {
   id: string;
@@ -58,9 +59,9 @@ export function TasksClient() {
     setError(null);
     try {
       const [tasksRes, deptsRes, agentsRes] = await Promise.all([
-        fetch("/api/tasks"),
-        fetch("/api/departments"),
-        fetch("/api/agents"),
+        fetchWithTenant("/api/tasks"),
+        fetchWithTenant("/api/departments"),
+        fetchWithTenant("/api/agents"),
       ]);
       if (!tasksRes.ok) throw new Error(`Tasks: HTTP ${tasksRes.status}`);
       setTasks(await tasksRes.json());
@@ -95,7 +96,7 @@ export function TasksClient() {
         departmentId: form.departmentId,
         agentId: form.agentId || undefined,
       };
-      const res = await fetch("/api/tasks", {
+      const res = await fetchWithTenant("/api/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),

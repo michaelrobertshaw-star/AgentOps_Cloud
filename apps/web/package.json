@@ -11,6 +11,9 @@
   },
   "dependencies": {
     "@agentops/shared": "workspace:*",
+    "@pdfme/common": "^5.5.10",
+    "@pdfme/schemas": "^5.5.10",
+    "@pdfme/ui": "^5.5.10",
     "@types/js-yaml": "^4.0.9",
     "jose": "^6.2.2",
     "js-yaml": "^4.1.1",

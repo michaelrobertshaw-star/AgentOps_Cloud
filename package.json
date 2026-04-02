@@ -18,7 +18,9 @@
     "test:watch": "vitest",
     "db:generate": "pnpm --filter @agentops/db generate",
     "db:migrate": "pnpm --filter @agentops/db migrate",
-    "db:studio": "pnpm --filter @agentops/db studio"
+    "db:studio": "pnpm --filter @agentops/db studio",
+    "seed:demo": "pnpm --filter @agentops/server tsx src/scripts/seedDemo.ts",
+    "seed:templates": "pnpm --filter @agentops/server tsx src/scripts/seedDemoTemplates.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.18.0",

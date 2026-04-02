@@ -458,6 +458,8 @@ export const incidents = pgTable(
     severity: incidentSeverityEnum("severity").notNull(),
     status: incidentStatusEnum("status").default("open").notNull(),
     resolution: text("resolution"),
+    incidentId: varchar("incident_id", { length: 30 }), // INC-YYYYMMDD-XXXX (Task 19)
+    attachmentsRef: jsonb("attachments_ref").default([]), // array of S3 keys (Task 17/18)
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),
     resolvedByUserId: uuid("resolved_by_user_id").references(() => users.id),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -641,12 +643,26 @@ export const webhookDeliveries = pgTable(
 // CONNECTORS (M6.3)
 // ================================================================
 
+// IMPORTANT: Drizzle doesn't support ALTER ENUM directly.
+// The enum values must be added to the pgEnum() call.
 export const connectorTypeEnum = pgEnum("connector_type", [
   "claude_api",
   "claude_browser",
   "webhook",
   "http_get",
   "minio_storage",
+  // Infrastructure layer
+  "aws_bedrock",
+  "gcp_vertex",
+  "replicate",
+  "modal",
+  // Data layer
+  "postgres_db",
+  "rest_api",
+  "vector_db",
+  "pdf_docs",
+  // MCP
+  "mcp_server",
 ]);
 
 export const connectors = pgTable(
@@ -733,6 +749,7 @@ export const agentRuns = pgTable(
     tokensOutput: integer("tokens_output").default(0).notNull(),
     costUsd: decimal("cost_usd", { precision: 12, scale: 6 }),
     durationMs: integer("duration_ms"),
+    logs: jsonb("logs").default([]),
     error: text("error"),
     startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
@@ -834,6 +851,40 @@ export const agentSkills = pgTable(
 );
 
 // ================================================================
+// NOTIFICATIONS
+// ================================================================
+
+export const notificationTypeEnum = pgEnum("notification_type", [
+  "agent_stopped",
+  "agent_failed",
+  "run_completed",
+  "incident_created",
+  "system",
+]);
+
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    type: notificationTypeEnum("type").notNull(),
+    title: varchar("title", { length: 255 }).notNull(),
+    message: text("message").notNull(),
+    actorUserId: uuid("actor_user_id").references(() => users.id, { onDelete: "set null" }),
+    resourceType: varchar("resource_type", { length: 50 }),
+    resourceId: uuid("resource_id"),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_notifications_company").on(table.companyId, table.createdAt),
+    index("idx_notifications_unread").on(table.companyId, table.readAt),
+  ],
+);
+
+// ================================================================
 // DRIZZLE RELATIONS (for query builder `with` syntax)
 // ================================================================
 
@@ -858,5 +909,184 @@ export const agentSkillsRelations = relations(agentSkills, ({ one }) => ({
   agent: one(agents, {
     fields: [agentSkills.agentId],
     references: [agents.id],
+  }),
+}));
+
+// ── Agent Templates ─────────────────────────────────────────────────────────
+export const agentTemplates = pgTable(
+  "agent_templates",
+  {
+    id:                 uuid("id").defaultRandom().primaryKey(),
+    companyId:          uuid("company_id").references(() => companies.id, { onDelete: "cascade" }),
+    slug:               varchar("slug", { length: 100 }).notNull().unique(),
+    name:               varchar("name", { length: 200 }).notNull(),
+    description:        text("description"),
+    tier:               varchar("tier", { length: 20 }).notNull().default("simple"),
+    layerConfig:        jsonb("layer_config").default({}).notNull(),
+    defaultAgentConfig: jsonb("default_agent_config").default({}).notNull(),
+    isBuiltIn:          boolean("is_built_in").default(false).notNull(),
+    isActive:           boolean("is_active").default(true).notNull(),
+    useCount:           integer("use_count").default(0).notNull(),
+    createdAt:          timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt:          timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    visibility:         varchar("visibility", { length: 20 }).notNull().default("private"),
+    publishedAt:        timestamp("published_at", { withTimezone: true }),
+    publishedByCompanyId: uuid("published_by_company_id").references(() => companies.id, { onDelete: "set null" }),
+    installCount:       integer("install_count").default(0).notNull(),
+    tags:               jsonb("tags").default([]).notNull(),
+  },
+  (table) => [
+    index("idx_at_tier").on(table.tier),
+    index("idx_at_company").on(table.companyId),
+    index("idx_at_builtin").on(table.isBuiltIn),
+    index("idx_at_slug").on(table.slug),
+  ],
+);
+
+// ── Knowledge Chunks (RAG vector store) ─────────────────────────────────────
+// NOTE: The vector column type requires drizzle-orm/pg-core vector support.
+// We store embedding as text (JSON array) as a fallback if vector extension
+// isn't available, and use a real vector column via raw SQL in migration.
+// For now, store as jsonb for the ORM definition.
+export const knowledgeChunks = pgTable(
+  "knowledge_chunks",
+  {
+    id:        uuid("id").defaultRandom().primaryKey(),
+    companyId: uuid("company_id")
+                 .references(() => companies.id, { onDelete: "cascade" }).notNull(),
+    agentId:   uuid("agent_id")
+                 .references(() => agents.id, { onDelete: "cascade" }).notNull(),
+    content:   text("content").notNull(),
+    embedding: jsonb("embedding"),   // stored as number[] JSON; migration adds real vector column
+    metadata:  jsonb("metadata").default({}).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_kc_agent").on(table.agentId),
+    index("idx_kc_company").on(table.companyId),
+  ],
+);
+
+// ── Template Installs (marketplace tracking) ─────────────────────────────────
+export const templateInstalls = pgTable(
+  "template_installs",
+  {
+    id:                uuid("id").defaultRandom().primaryKey(),
+    companyId:         uuid("company_id")
+                         .references(() => companies.id, { onDelete: "cascade" }).notNull(),
+    templateId:        uuid("template_id")
+                         .references(() => agentTemplates.id, { onDelete: "cascade" }).notNull(),
+    installedByUserId: uuid("installed_by_user_id")
+                         .references(() => users.id, { onDelete: "set null" }),
+    installedAt:       timestamp("installed_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("idx_template_installs_unique").on(table.companyId, table.templateId),
+    index("idx_template_installs_company").on(table.companyId),
+    index("idx_template_installs_template").on(table.templateId),
+  ],
+);
+
+export const agentTemplatesRelations = relations(agentTemplates, ({ one }) => ({
+  company: one(companies, {
+    fields: [agentTemplates.companyId],
+    references: [companies.id],
+  }),
+}));
+
+export const knowledgeChunksRelations = relations(knowledgeChunks, ({ one }) => ({
+  company: one(companies, {
+    fields: [knowledgeChunks.companyId],
+    references: [companies.id],
+  }),
+  agent: one(agents, {
+    fields: [knowledgeChunks.agentId],
+    references: [agents.id],
+  }),
+}));
+
+// ================================================================
+// TOOLS (Platform tool definitions for connectors)
+// ================================================================
+
+export const tools = pgTable(
+  "tools",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    connectorId: uuid("connector_id")
+      .references(() => connectors.id, { onDelete: "cascade" })
+      .notNull(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    name: varchar("name", { length: 100 }).notNull(),
+    displayName: varchar("display_name", { length: 255 }).notNull(),
+    description: text("description").notNull(),
+    inputSchema: jsonb("input_schema").notNull(),
+    httpMethod: varchar("http_method", { length: 10 }).default("POST"),
+    endpointPath: varchar("endpoint_path", { length: 500 }).notNull(),
+    fieldMapping: jsonb("field_mapping").default({}).notNull(),
+    responseMapping: jsonb("response_mapping").default({}).notNull(),
+    staticParams: jsonb("static_params").default({}).notNull(),
+    testInput: jsonb("test_input"),
+    lastTestAt: timestamp("last_test_at", { withTimezone: true }),
+    lastTestOk: boolean("last_test_ok"),
+    source: varchar("source", { length: 50 }).default("manual"),
+    enabled: boolean("enabled").default(true).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("idx_tools_connector_name").on(table.connectorId, table.name),
+    index("idx_tools_company").on(table.companyId),
+    index("idx_tools_connector").on(table.connectorId),
+  ],
+);
+
+// ================================================================
+// TOOL EXECUTIONS (Execution log for platform tools)
+// ================================================================
+
+export const toolExecutions = pgTable(
+  "tool_executions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    toolId: uuid("tool_id").references(() => tools.id),
+    agentId: uuid("agent_id").notNull(),
+    agentRunId: uuid("agent_run_id"),
+    companyId: uuid("company_id").notNull(),
+    inputParams: jsonb("input_params"),
+    mappedParams: jsonb("mapped_params"),
+    responseRaw: jsonb("response_raw"),
+    responseMapped: jsonb("response_mapped"),
+    status: varchar("status", { length: 20 }).notNull(),
+    errorMessage: text("error_message"),
+    durationMs: integer("duration_ms"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_tool_executions_tool").on(table.toolId),
+    index("idx_tool_executions_company").on(table.companyId, table.createdAt),
+    index("idx_tool_executions_agent_run").on(table.agentRunId),
+  ],
+);
+
+// ── Tool relations ─────────────────────────────────────────────
+export const toolsRelations = relations(tools, ({ one, many }) => ({
+  connector: one(connectors, {
+    fields: [tools.connectorId],
+    references: [connectors.id],
+  }),
+  company: one(companies, {
+    fields: [tools.companyId],
+    references: [companies.id],
+  }),
+  executions: many(toolExecutions),
+}));
+
+export const toolExecutionsRelations = relations(toolExecutions, ({ one }) => ({
+  tool: one(tools, {
+    fields: [toolExecutions.toolId],
+    references: [tools.id],
   }),
 }));

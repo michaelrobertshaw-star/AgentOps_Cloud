@@ -3,6 +3,7 @@ const nextConfig = {
   output: "standalone",
   experimental: {
     serverComponentsExternalPackages: ["jose"],
+    serverBodySizeLimit: "50mb",
   },
   async rewrites() {
     return [

@@ -56,7 +56,17 @@ export type ConnectorType =
   | "claude_browser"
   | "webhook"
   | "http_get"
-  | "minio_storage";
+  | "minio_storage"
+  // Infrastructure layer
+  | "aws_bedrock"
+  | "gcp_vertex"
+  | "replicate"
+  | "modal"
+  // Data layer
+  | "postgres_db"
+  | "rest_api"
+  | "vector_db"
+  | "pdf_docs";
 
 // Permission types from ONE-3 security architecture
 export type Permission =
@@ -192,6 +202,55 @@ export const DEPARTMENT_ROLE_PERMISSIONS: Record<DepartmentRole, Permission[]> =
     "incident:view",
   ],
 };
+
+export interface AgentConfig {
+  preferred_model?: string;
+  routing_policy?: "cost_sensitive" | "speed_optimized" | "accuracy_first";
+  rag_enabled?: boolean;
+  source_template_id?: string;
+  layer_selections?: {
+    infrastructure?: string;
+    model?: string;
+    data?: string[];
+    orchestration?: string[];
+    application?: string;
+  };
+}
+
+export interface AgentTemplate {
+  id: string;
+  companyId: string | null;
+  slug: string;
+  name: string;
+  description: string | null;
+  tier: "simple" | "rag" | "autonomous" | "enterprise";
+  layerConfig: {
+    infrastructure?: string;
+    model?: string;
+    data?: string[];
+    orchestration?: string[];
+    application?: string;
+  };
+  defaultAgentConfig: AgentConfig & Record<string, unknown>;
+  isBuiltIn: boolean;
+  isActive: boolean;
+  useCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KnowledgeChunk {
+  id: string;
+  companyId: string;
+  agentId: string;
+  content: string;
+  metadata: {
+    source_name?: string;
+    chunk_index?: number;
+    total_chunks?: number;
+  };
+  createdAt: string;
+}
 
 // JWT token payload types
 export interface JwtPayload {

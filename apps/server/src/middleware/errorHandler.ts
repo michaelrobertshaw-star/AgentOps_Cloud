@@ -19,7 +19,7 @@ export function errorHandler() {
     res.status(500).json({
       error: {
         code: "INTERNAL_ERROR",
-        message: "An unexpected error occurred",
+        message: err.message || "An unexpected error occurred",
       },
     });
   };

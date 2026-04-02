@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { fetchWithTenant } from "@/lib/fetchWithTenant";
 
 interface AuditLog {
   id: string;
@@ -32,7 +33,7 @@ export function AuditClient() {
     try {
       const params = new URLSearchParams({ limit: "50" });
       if (pageCursor) params.set("cursor", pageCursor);
-      const res = await fetch(`/api/audit-logs?${params}`);
+      const res = await fetchWithTenant(`/api/audit-logs?${params}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const result: AuditResult = await res.json();
       setLogs(result.data);

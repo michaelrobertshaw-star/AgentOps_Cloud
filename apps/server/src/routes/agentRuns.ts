@@ -19,59 +19,24 @@
 import { Router } from "express";
 import { z } from "zod";
 import { eq, and, desc } from "drizzle-orm";
-import Anthropic from "@anthropic-ai/sdk";
 import {
   agentRuns,
   agentSkills,
   skills,
   agents,
+  connectors,
 } from "@agentops/db";
 import { authenticate } from "../middleware/auth.js";
 import { requirePermission } from "../middleware/rbac.js";
 import { validate } from "../middleware/validate.js";
 import { getDb } from "../lib/db.js";
 import { NotFoundError, PaymentRequiredError } from "../lib/errors.js";
-import { loadAgentConnectorSecrets } from "./connectors.js";
+import { loadAgentConnectorSecrets, loadCompanyDefaultApiKey } from "./connectors.js";
 import { checkSpendCap } from "./usage.js";
+import { agentRunQueue } from "../queues/agentRunQueue.js";
+import { sseListeners } from "../workers/agentRunWorker.js";
 
-// ================================================================
-// In-memory SSE event bus (per run-id)
-// ================================================================
-
-type SseListener = (chunk: string) => void;
-
-const sseListeners = new Map<string, Set<SseListener>>();
-
-function emitChunk(runId: string, chunk: string) {
-  const listeners = sseListeners.get(runId);
-  if (listeners) {
-    for (const fn of listeners) fn(chunk);
-  }
-}
-
-function emitDone(runId: string) {
-  const listeners = sseListeners.get(runId);
-  if (listeners) {
-    for (const fn of listeners) fn("[DONE]");
-    sseListeners.delete(runId);
-  }
-}
-
-// ================================================================
-// Cost calculation (USD per token)
-// Rates: claude-sonnet-4-6 = $3/M input, $15/M output
-//        claude-3-5-sonnet-20241022 = $3/M input, $15/M output
-// ================================================================
-
-const MODEL_RATES: Record<string, { inputPer1M: number; outputPer1M: number }> = {
-  "claude-sonnet-4-6": { inputPer1M: 3.0, outputPer1M: 15.0 },
-  "claude-3-5-sonnet-20241022": { inputPer1M: 3.0, outputPer1M: 15.0 },
-};
-
-function calcCost(model: string, tokensIn: number, tokensOut: number): number {
-  const rates = MODEL_RATES[model] ?? { inputPer1M: 3.0, outputPer1M: 15.0 };
-  return (tokensIn / 1_000_000) * rates.inputPer1M + (tokensOut / 1_000_000) * rates.outputPer1M;
-}
+// SSE listeners and emitters are now in agentRunWorker.ts (imported above)
 
 // ================================================================
 // Build system prompt from agent identity + skills
@@ -162,29 +127,63 @@ export function agentRunRoutes() {
           throw new PaymentRequiredError(capCheck.reason ?? "Monthly spend cap exceeded");
         }
 
-        // Determine model: use browser model if agent has a claude_browser connector
+        // Determine provider, model, and credentials from connectors
         const connectorData = await loadAgentConnectorSecrets(agentId, companyId);
-        const hasBrowser = connectorData.some((c) => c.connector.type === "claude_browser");
         const defaultModel = process.env.ANTHROPIC_DEFAULT_MODEL ?? "claude-sonnet-4-6";
-        const browserModel = process.env.ANTHROPIC_BROWSER_MODEL ?? "claude-3-5-sonnet-20241022";
-        const model = hasBrowser ? browserModel : defaultModel;
 
-        // Find API key from claude_api or claude_browser connector,
-        // falling back to the env ANTHROPIC_API_KEY if none attached.
-        let apiKey = process.env.ANTHROPIC_API_KEY ?? "";
-        for (const { connector, secrets } of connectorData) {
-          if (
-            (connector.type === "claude_api" || connector.type === "claude_browser") &&
-            secrets.api_key
-          ) {
-            apiKey = secrets.api_key;
-            break;
+        // Detect provider type from attached connectors
+        let providerType: "anthropic" | "aws_bedrock" | "gcp_vertex" = "anthropic";
+        let providerConfig: Record<string, string> = {};
+        let model = defaultModel;
+        let apiKey = "";
+
+        // Check for Bedrock connector
+        const bedrockConn = connectorData.find((c) => c.connector.type === "aws_bedrock");
+        if (bedrockConn) {
+          providerType = "aws_bedrock";
+          const cfg = bedrockConn.connector.config as Record<string, string>;
+          providerConfig = {
+            access_key_id: bedrockConn.secrets.access_key_id ?? "",
+            secret_access_key: bedrockConn.secrets.secret_access_key ?? "",
+            region: cfg.region ?? "us-east-1",
+          };
+          model = cfg.model ?? "anthropic.claude-sonnet-4-6-v1:0";
+        }
+
+        // Check for Vertex connector (overrides Bedrock if both present)
+        const vertexConn = connectorData.find((c) => c.connector.type === "gcp_vertex");
+        if (vertexConn) {
+          providerType = "gcp_vertex";
+          const cfg = vertexConn.connector.config as Record<string, string>;
+          providerConfig = {
+            project_id: cfg.project_id ?? "",
+            location: cfg.location ?? "us-central1",
+            service_account_json: vertexConn.secrets.service_account_json ?? "",
+          };
+          model = cfg.model ?? "claude-sonnet-4-6@20250514";
+        }
+
+        // For Anthropic (default), find API key from connectors
+        if (providerType === "anthropic") {
+          for (const { connector, secrets } of connectorData) {
+            if (
+              (connector.type === "claude_api" || connector.type === "claude_browser") &&
+              secrets.api_key
+            ) {
+              apiKey = secrets.api_key;
+              break;
+            }
+          }
+          if (!apiKey) {
+            apiKey = await loadCompanyDefaultApiKey(companyId);
+          }
+          if (!apiKey) {
+            apiKey = process.env.ANTHROPIC_API_KEY ?? "";
           }
         }
 
         // Create run record (status: running)
         const { input, taskId } = req.body as z.infer<typeof dispatchRunSchema>;
-        const startedAt = new Date();
 
         const [run] = await db
           .insert(agentRuns)
@@ -195,12 +194,23 @@ export function agentRunRoutes() {
             status: "running",
             input: { text: input },
             model,
-            startedAt,
           })
           .returning();
 
         // Build system prompt from assigned skills
         const systemPrompt = await buildSystemPrompt(agentId, companyId);
+
+        // Read RAG and routing config from agent.config
+        const agentConfig = (agent.config as Record<string, unknown>) ?? {};
+        const ragEnabled = agentConfig.rag_enabled === true;
+        const ragPrompt = typeof agentConfig.rag_prompt === "string"
+          ? agentConfig.rag_prompt : undefined;
+        const ragTimeoutMs = typeof agentConfig.rag_timeout_ms === "number"
+          ? agentConfig.rag_timeout_ms : undefined;
+        const preferredModel = typeof agentConfig.preferred_model === "string"
+          ? agentConfig.preferred_model : undefined;
+        const routingPolicy = typeof agentConfig.routing_policy === "string"
+          ? agentConfig.routing_policy : undefined;
 
         // If streaming requested, set up SSE headers immediately
         const wantStream = req.body.stream === true;
@@ -213,86 +223,49 @@ export function agentRunRoutes() {
           res.write(`data: {"runId":"${run.id}"}\n\n`);
         }
 
-        // ── Claude API call (async, non-blocking for SSE) ──────────────────
-        const anthropic = new Anthropic({ apiKey });
-        let fullOutput = "";
-        let tokensInput = 0;
-        let tokensOutput = 0;
+        // ── Dispatch to BullMQ persistent job queue ──────────────────
+        await agentRunQueue.add(
+          "run",
+          {
+            agentId,
+            companyId,
+            input,
+            runId: run.id,
+            model,
+            systemPrompt,
+            apiKey,
+            ragEnabled,
+            ragPrompt,
+            ragTimeoutMs,
+            preferredModel,
+            routingPolicy,
+            providerType,
+            providerConfig,
+          },
+          {
+            attempts: 3,
+            backoff: { type: "exponential", delay: 2000 },
+          },
+        );
 
-        (async () => {
-          try {
-            const stream = await anthropic.messages.stream({
-              model,
-              max_tokens: 8096,
-              system: systemPrompt,
-              messages: [{ role: "user", content: input }],
-            });
-
-            for await (const event of stream) {
-              if (
-                event.type === "content_block_delta" &&
-                event.delta.type === "text_delta"
-              ) {
-                const chunk = event.delta.text;
-                fullOutput += chunk;
-                if (wantStream) {
-                  const encoded = JSON.stringify({ chunk });
-                  res.write(`data: ${encoded}\n\n`);
-                }
-                emitChunk(run.id, chunk);
-              }
-            }
-
-            // Final message with usage
-            const finalMessage = await stream.finalMessage();
-            tokensInput = finalMessage.usage?.input_tokens ?? 0;
-            tokensOutput = finalMessage.usage?.output_tokens ?? 0;
-
-            const completedAt = new Date();
-            const durationMs = completedAt.getTime() - startedAt.getTime();
-            const costUsd = calcCost(model, tokensInput, tokensOutput);
-
-            await db
-              .update(agentRuns)
-              .set({
-                status: "completed",
-                output: fullOutput,
-                tokensInput,
-                tokensOutput,
-                costUsd: String(costUsd),
-                durationMs,
-                completedAt,
-              })
-              .where(eq(agentRuns.id, run.id));
-
-            if (wantStream) {
+        // For streaming: forward SSE chunks emitted by the worker
+        if (wantStream) {
+          if (!sseListeners.has(run.id)) {
+            sseListeners.set(run.id, new Set());
+          }
+          const forwardListener = (chunk: string) => {
+            if (chunk === "[DONE]") {
               res.write(`data: [DONE]\n\n`);
               res.end();
+            } else {
+              res.write(`data: ${JSON.stringify({ chunk })}\n\n`);
             }
-            emitDone(run.id);
-          } catch (err) {
-            const errorMsg = err instanceof Error ? err.message : String(err);
-            const completedAt = new Date();
-            const durationMs = completedAt.getTime() - startedAt.getTime();
-
-            await db
-              .update(agentRuns)
-              .set({
-                status: "failed",
-                error: errorMsg,
-                durationMs,
-                completedAt,
-              })
-              .where(eq(agentRuns.id, run.id));
-
-            if (wantStream) {
-              const errPayload = JSON.stringify({ error: errorMsg });
-              res.write(`data: ${errPayload}\n\n`);
-              res.end();
-            }
-            emitDone(run.id);
-          }
-        })();
+          };
+          sseListeners.get(run.id)!.add(forwardListener);
+          req.on("close", () => {
+            sseListeners.get(run.id)?.delete(forwardListener);
+          });
+        }
 
         // If not streaming, wait for completion and return full result
         if (!wantStream) {
@@ -386,7 +359,7 @@ export function agentRunDetailRoutes() {
             res.write(`data: ${JSON.stringify({ chunk: run.output })}\n\n`);
           }
           if (run.error) {
-            res.write(`data: ${JSON.stringify({ error: run.error })}\n\n`);
+            res.write(`data: ${JSON.stringify({ status: "failed", error: run.error })}\n\n`);
           }
           res.write(`data: [DONE]\n\n`);
           return res.end();
@@ -396,10 +369,13 @@ export function agentRunDetailRoutes() {
         if (!sseListeners.has(runId)) {
           sseListeners.set(runId, new Set());
         }
-        const listener: SseListener = (chunk) => {
+        const listener = (chunk: string) => {
           if (chunk === "[DONE]") {
             res.write(`data: [DONE]\n\n`);
             res.end();
+          } else if (chunk.startsWith("{\"log\":") || chunk.startsWith("{\"ragStatus\":") || chunk.startsWith("{\"toolCall\":") || chunk.startsWith("{\"toolResult\":")) {
+            // Structured event — send as-is so the UI can parse it separately
+            res.write(`data: ${chunk}\n\n`);
           } else {
             res.write(`data: ${JSON.stringify({ chunk })}\n\n`);
           }

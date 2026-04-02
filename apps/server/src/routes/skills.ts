@@ -19,6 +19,26 @@ import { NotFoundError } from "../lib/errors.js";
 // Validation schemas
 // ================================================================
 
+/**
+ * skillContentSchema — validates the parsed YAML content object stored in skills.content.
+ * Exported so the web client can re-use it for client-side validation.
+ */
+export const skillContentSchema = z.object({
+  instructions: z.string().min(10, "instructions must be at least 10 characters"),
+  persona: z.string().optional(),
+  tools: z
+    .array(
+      z.object({
+        name: z.string().min(1),
+        description: z.string().min(1),
+      }),
+    )
+    .optional(),
+  constraints: z.array(z.string()).optional(),
+});
+
+export type SkillContent = z.infer<typeof skillContentSchema>;
+
 const createSkillSchema = z.object({
   name: z.string().min(1).max(100),
   description: z.string().max(1000).optional(),
@@ -30,6 +50,24 @@ const updateSkillSchema = z.object({
   description: z.string().max(1000).optional(),
   content: z.record(z.unknown()).optional(),
 });
+
+/**
+ * Validate the `content` field against skillContentSchema.
+ * Returns structured errors array or null if valid.
+ */
+function validateSkillContent(
+  content: Record<string, unknown> | undefined,
+): Array<{ field: string; message: string }> | null {
+  if (!content) {
+    return [{ field: "instructions", message: "instructions is required" }];
+  }
+  const result = skillContentSchema.safeParse(content);
+  if (result.success) return null;
+  return result.error.errors.map((e) => ({
+    field: e.path.join(".") || "content",
+    message: e.message,
+  }));
+}
 
 // ================================================================
 // Skill routes: /api/skills
@@ -62,6 +100,13 @@ export function skillRoutes() {
       try {
         const db = getDb();
         const { name, description, content } = req.body as z.infer<typeof createSkillSchema>;
+
+        // Validate skill content structure
+        const contentErrors = validateSkillContent(content as Record<string, unknown>);
+        if (contentErrors) {
+          res.status(400).json({ errors: contentErrors });
+          return;
+        }
 
         const [skill] = await db
           .insert(skills)
@@ -130,6 +175,15 @@ export function skillRoutes() {
         if (!existing) throw new NotFoundError("Skill");
 
         const { name, description, content } = req.body as z.infer<typeof updateSkillSchema>;
+
+        // Validate skill content structure if provided
+        if (content !== undefined) {
+          const contentErrors = validateSkillContent(content as Record<string, unknown>);
+          if (contentErrors) {
+            res.status(400).json({ errors: contentErrors });
+            return;
+          }
+        }
 
         const [updated] = await db
           .update(skills)

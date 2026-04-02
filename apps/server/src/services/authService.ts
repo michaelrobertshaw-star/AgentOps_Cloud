@@ -152,7 +152,7 @@ export async function registerCompanyAndUser(input: {
       email: input.email,
       name: input.name,
       passwordHash,
-      role: "oneops_admin",
+      role: "customer_admin",
       status: "active",
     })
     .returning();

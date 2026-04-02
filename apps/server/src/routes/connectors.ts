@@ -18,6 +18,7 @@ import { requirePermission } from "../middleware/rbac.js";
 import { validate } from "../middleware/validate.js";
 import { getDb } from "../lib/db.js";
 import { NotFoundError, ForbiddenError, ValidationError } from "../lib/errors.js";
+import { parseMcpConfig } from "../services/mcpService.js";
 
 // ================================================================
 // Encryption helpers
@@ -31,13 +32,20 @@ function getEncryptionKey(): Buffer {
     // 32 bytes as hex string
     return Buffer.from(raw, "hex");
   }
-  // Fallback: derive 32 bytes from whatever is provided (development only).
-  // In production, CONNECTOR_ENCRYPTION_KEY must be a 64-char hex string.
+  // In production, reject weak/missing keys
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "FATAL: CONNECTOR_ENCRYPTION_KEY must be a 64-char hex string in production. " +
+      "Generate one with: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\""
+    );
+  }
+  // Development fallback: derive 32 bytes from whatever is provided.
+  console.warn("[SECURITY] CONNECTOR_ENCRYPTION_KEY not set or invalid — using weak fallback. NOT safe for production.");
   const padded = raw.padEnd(64, "0").slice(0, 64);
   return Buffer.from(padded, "hex");
 }
 
-interface EncryptedPayload {
+export interface EncryptedPayload {
   iv: string;
   tag: string;
   ciphertext: string;
@@ -57,7 +65,7 @@ function encryptSecrets(plaintext: Record<string, string>): EncryptedPayload {
   };
 }
 
-function decryptSecrets(payload: EncryptedPayload): Record<string, string> {
+export function decryptSecrets(payload: EncryptedPayload): Record<string, string> {
   const key = getEncryptionKey();
   const decipher = createDecipheriv(
     ALGORITHM,
@@ -92,6 +100,15 @@ const connectorTypeEnum = z.enum([
   "webhook",
   "http_get",
   "minio_storage",
+  "aws_bedrock",
+  "gcp_vertex",
+  "postgres_db",
+  "pdf_docs",
+  "vector_db",
+  "rest_api",
+  "replicate",
+  "modal",
+  "mcp_server",
 ]);
 
 const createConnectorSchema = z.object({
@@ -308,6 +325,44 @@ export function connectorRoutes() {
     },
   );
 
+  // POST /api/connectors/:id/test-mcp — test MCP server connection and list tools
+  router.post(
+    "/:id/test-mcp",
+    authenticate(),
+    requirePermission("connector:manage"),
+    async (req, res, next) => {
+      try {
+        const db = getDb();
+        const id = req.params.id as string;
+        const connector = await db.query.connectors.findFirst({
+          where: and(
+            eq(connectors.id, id),
+            eq(connectors.companyId, req.companyId!),
+          ),
+        });
+
+        if (!connector) throw new NotFoundError("Connector");
+        if ((connector.type as string) !== "mcp_server") {
+          throw new ValidationError("Connector is not an MCP server type");
+        }
+
+        const config = parseMcpConfig(connector.config as Record<string, unknown>);
+
+        res.json({
+          transport: config.transport,
+          endpoint: config.endpoint ?? null,
+          toolCount: config.tools.length,
+          tools: config.tools.map((t) => ({
+            name: t.name,
+            description: t.description,
+          })),
+        });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
   return router;
 }
 
@@ -455,17 +510,36 @@ export async function loadAgentConnectorSecrets(
 ): Promise<Array<{ connector: typeof connectors.$inferSelect; secrets: Record<string, string> }>> {
   const db = getDb();
 
+  // SECURITY: Filter at DB level — never load cross-tenant secrets into memory
   const rows = await db.query.agentConnectors.findMany({
-    where: eq(agentConnectors.agentId, agentId),
+    where: and(eq(agentConnectors.agentId, agentId), eq(agentConnectors.companyId, companyId)),
     with: { connector: true },
   });
 
   return rows
-    .filter((r) => r.connector.companyId === companyId)
+    .filter((r) => r.connector.companyId === companyId) // belt-and-suspenders
     .map((r) => ({
       connector: r.connector,
       secrets: r.connector.secretsEncrypted
         ? decryptSecrets(r.connector.secretsEncrypted as EncryptedPayload)
         : {},
     }));
+}
+
+/**
+ * Returns the api_key from the company's default claude_api connector,
+ * or "" if none exists. Used as fallback when an agent has no connector attached.
+ */
+export async function loadCompanyDefaultApiKey(companyId: string): Promise<string> {
+  const db = getDb();
+  const row = await db.query.connectors.findFirst({
+    where: and(
+      eq(connectors.companyId, companyId),
+      eq(connectors.type, "claude_api"),
+      eq(connectors.isDefault, true),
+    ),
+  });
+  if (!row || !row.secretsEncrypted) return "";
+  const secrets = decryptSecrets(row.secretsEncrypted as EncryptedPayload);
+  return secrets.api_key ?? "";
 }
