@@ -127,7 +127,13 @@ export default function TemplateDesigner({
               const res = await fetch(str);
               const buf = await res.arrayBuffer();
               const mime = res.headers.get("content-type") || "image/jpeg";
-              const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+              // Chunked base64 conversion — spread operator crashes on large arrays
+              const bytes = new Uint8Array(buf);
+              let binary = "";
+              for (let j = 0; j < bytes.length; j++) {
+                binary += String.fromCharCode(bytes[j]);
+              }
+              const b64 = btoa(binary);
               if (!cancelled) resolved[key] = `data:${mime};base64,${b64}`;
             } catch {
               // leave as-is if fetch fails

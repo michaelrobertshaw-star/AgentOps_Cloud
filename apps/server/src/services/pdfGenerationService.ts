@@ -8,20 +8,50 @@ import { text, image, barcodes } from "@pdfme/schemas";
 import type { Template } from "@pdfme/common";
 import { downloadWorkspaceFile, uploadWorkspaceFile } from "./storageService.js";
 import pino from "pino";
+import path from "path";
 
 const logger = pino({ name: "pdf-generation" });
 
 // pdfme plugin registry
 const plugins = { text, image, ...barcodes };
 
+/** Max image fetch size (5 MB) and timeout (10s) */
+const IMAGE_FETCH_MAX_BYTES = 5 * 1024 * 1024;
+const IMAGE_FETCH_TIMEOUT_MS = 10_000;
+
 /**
- * Generate a single PDF from a pdfme template + data row.
+ * Check if a URL targets a private/reserved IP range (SSRF protection).
+ * Blocks: loopback, link-local, private RFC1918, metadata endpoints.
  */
+function isPrivateUrl(urlStr: string): boolean {
+  try {
+    const u = new URL(urlStr);
+    const host = u.hostname.toLowerCase();
+    if (
+      host === "localhost" ||
+      host.startsWith("127.") ||
+      host === "[::1]" ||
+      host.startsWith("10.") ||
+      host.startsWith("192.168.") ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+      host === "169.254.169.254" ||
+      host.startsWith("169.254.") ||
+      host.endsWith(".internal") ||
+      host === "metadata.google.internal"
+    ) {
+      return true;
+    }
+    return false;
+  } catch {
+    return true; // malformed URL → block
+  }
+}
+
 /**
  * Resolve a raw value to a pdfme-compatible image content string.
  * pdfme image fields require a base64 data URI (data:image/...;base64,...).
  * - Already a data URI → pass through
- * - URL (http/https) → fetch and convert to data URI
+ * - URL (http/https) → fetch and convert to data URI (with SSRF + size + timeout guards)
  * - Raw base64 string → prepend data:image/jpeg;base64,
  * - Otherwise → empty string
  */
@@ -31,9 +61,25 @@ async function resolveImageValue(val: unknown): Promise<string> {
   if (!str) return "";
   if (str.startsWith("data:")) return str;
   if (/^https?:\/\//i.test(str)) {
+    if (isPrivateUrl(str)) {
+      logger.warn({ url: str }, "Blocked private/internal URL in PDF image field (SSRF protection)");
+      return "";
+    }
     try {
-      const res = await fetch(str);
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), IMAGE_FETCH_TIMEOUT_MS);
+      const res = await fetch(str, { signal: controller.signal });
+      clearTimeout(timer);
+      const contentLength = res.headers.get("content-length");
+      if (contentLength && parseInt(contentLength, 10) > IMAGE_FETCH_MAX_BYTES) {
+        logger.warn({ url: str, size: contentLength }, "Image too large for PDF field");
+        return "";
+      }
       const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length > IMAGE_FETCH_MAX_BYTES) {
+        logger.warn({ url: str, size: buf.length }, "Image response exceeded size limit");
+        return "";
+      }
       const mime = res.headers.get("content-type") || "image/jpeg";
       return `data:${mime};base64,${buf.toString("base64")}`;
     } catch (err) {
@@ -101,8 +147,11 @@ export async function loadTemplate(
   if (basePdfKey.startsWith("local:")) {
     // Local disk storage (dev without Docker/MinIO)
     const { readFileSync } = await import("fs");
-    const { join } = await import("path");
-    const localPath = join(process.cwd(), "uploads/templates", basePdfKey.replace("local:templates/", ""));
+    const baseDir = path.resolve(process.cwd(), "uploads/templates");
+    const localPath = path.resolve(baseDir, basePdfKey.replace("local:templates/", ""));
+    if (!localPath.startsWith(baseDir + path.sep) && localPath !== baseDir) {
+      throw new Error("Invalid template path — traversal detected");
+    }
     pdfBuffer = readFileSync(localPath);
   } else {
     const result = await downloadWorkspaceFile(basePdfKey);
@@ -152,13 +201,18 @@ export async function generateBatchPdfs(
       // Clean up any remaining placeholders
       filename = filename.replace(/\{[^}]+\}/g, "unknown");
       if (!filename.endsWith(".pdf")) filename += ".pdf";
+      // Strip any directory traversal from the final filename
+      filename = path.basename(filename);
 
       // Save to local disk (fallback for dev without S3/MinIO)
       const { mkdirSync, writeFileSync } = await import("fs");
-      const { join } = await import("path");
-      const outDir = join(process.cwd(), "uploads/runs", companyId, runId);
+      const outDir = path.resolve(process.cwd(), "uploads/runs", companyId, runId);
       mkdirSync(outDir, { recursive: true });
-      writeFileSync(join(outDir, filename), pdfBuffer);
+      const outPath = path.resolve(outDir, filename);
+      if (!outPath.startsWith(outDir + path.sep) && outPath !== outDir) {
+        throw new Error("Invalid output filename — traversal detected");
+      }
+      writeFileSync(outPath, pdfBuffer);
       const s3Key = `local:runs/${companyId}/${runId}/${filename}`;
 
       results.push({ filename, s3Key, rowIndex: i });

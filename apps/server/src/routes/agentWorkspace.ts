@@ -886,10 +886,18 @@ export function agentWorkspaceTemplateRoutes() {
         // or base64 JSON body { pdf: "base64..." }
         let pdfBuffer: Buffer;
 
+        const MAX_PDF_SIZE = 50 * 1024 * 1024; // 50 MB
+
         if (req.headers["content-type"]?.includes("application/pdf")) {
           const chunks: Buffer[] = [];
+          let totalSize = 0;
           for await (const chunk of req) {
-            chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+            const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+            totalSize += buf.length;
+            if (totalSize > MAX_PDF_SIZE) {
+              return res.status(413).json({ error: `PDF too large (max ${MAX_PDF_SIZE / 1024 / 1024}MB)` });
+            }
+            chunks.push(buf);
           }
           pdfBuffer = Buffer.concat(chunks);
         } else {
@@ -898,10 +906,18 @@ export function agentWorkspaceTemplateRoutes() {
           // Strip data URL prefix if present
           const b64 = typeof pdf === "string" && pdf.includes(",") ? pdf.split(",")[1] : pdf;
           pdfBuffer = Buffer.from(b64, "base64");
+          if (pdfBuffer.length > MAX_PDF_SIZE) {
+            return res.status(413).json({ error: `PDF too large (max ${MAX_PDF_SIZE / 1024 / 1024}MB)` });
+          }
         }
 
         if (pdfBuffer.length === 0) {
           return res.status(400).json({ error: "Empty PDF" });
+        }
+
+        // Validate PDF magic bytes
+        if (!pdfBuffer.subarray(0, 5).toString().startsWith("%PDF-")) {
+          return res.status(400).json({ error: "File is not a valid PDF" });
         }
 
         // Save to local disk (S3 fallback for dev without Docker/MinIO)
@@ -953,8 +969,12 @@ export function agentWorkspaceTemplateRoutes() {
 
         if (pdfKey.startsWith("local:")) {
           const { readFileSync } = await import("fs");
-          const { join } = await import("path");
-          const localPath = join(process.cwd(), "uploads/templates", pdfKey.replace("local:templates/", ""));
+          const path = await import("path");
+          const baseDir = path.resolve(process.cwd(), "uploads/templates");
+          const localPath = path.resolve(baseDir, pdfKey.replace("local:templates/", ""));
+          if (!localPath.startsWith(baseDir + path.sep) && localPath !== baseDir) {
+            return res.status(400).json({ error: "Invalid template path" });
+          }
           res.send(readFileSync(localPath));
         } else {
           const { downloadWorkspaceFile } = await import("../services/storageService.js");
