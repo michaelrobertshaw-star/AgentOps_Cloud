@@ -17,11 +17,54 @@ const plugins = { text, image, ...barcodes };
 /**
  * Generate a single PDF from a pdfme template + data row.
  */
+/**
+ * Resolve a raw value to a pdfme-compatible image content string.
+ * pdfme image fields require a base64 data URI (data:image/...;base64,...).
+ * - Already a data URI → pass through
+ * - URL (http/https) → fetch and convert to data URI
+ * - Raw base64 string → prepend data:image/jpeg;base64,
+ * - Otherwise → empty string
+ */
+async function resolveImageValue(val: unknown): Promise<string> {
+  if (val === null || val === undefined) return "";
+  const str = String(val).trim();
+  if (!str) return "";
+  if (str.startsWith("data:")) return str;
+  if (/^https?:\/\//i.test(str)) {
+    try {
+      const res = await fetch(str);
+      const buf = Buffer.from(await res.arrayBuffer());
+      const mime = res.headers.get("content-type") || "image/jpeg";
+      return `data:${mime};base64,${buf.toString("base64")}`;
+    } catch (err) {
+      logger.warn({ url: str, err }, "Failed to fetch image URL for PDF field");
+      return "";
+    }
+  }
+  // Assume raw base64
+  return `data:image/jpeg;base64,${str}`;
+}
+
+/** Build a flat lookup of fieldName → field type from pdfme schema */
+function buildFieldTypeMap(schema: unknown): Record<string, string> {
+  const map: Record<string, string> = {};
+  const pages = Array.isArray(schema) ? schema : [];
+  for (const page of pages) {
+    const fields = Array.isArray(page) ? page : Object.values(page as object);
+    for (const field of fields as any[]) {
+      if (field?.name && field?.type) map[field.name] = field.type;
+    }
+  }
+  return map;
+}
+
 export async function generatePdf(
   template: Template,
   data: Record<string, unknown>,
   fieldMappings: Record<string, string>,
 ): Promise<Buffer> {
+  const fieldTypes = buildFieldTypeMap(template.schemas);
+
   // Build pdfme input by mapping template field names -> row data values
   const input: Record<string, string> = {};
 
@@ -29,9 +72,9 @@ export async function generatePdf(
     const rawValue = data[columnKey];
     if (rawValue === null || rawValue === undefined) {
       input[templateField] = "";
-    } else if (typeof rawValue === "string" && /^https?:\/\//i.test(rawValue)) {
-      // For image fields (like signatures), pass the URL directly
-      input[templateField] = rawValue;
+    } else if (fieldTypes[templateField] === "image") {
+      // Image fields need a base64 data URI — fetch URLs, wrap raw base64
+      input[templateField] = await resolveImageValue(rawValue);
     } else {
       input[templateField] = String(rawValue);
     }

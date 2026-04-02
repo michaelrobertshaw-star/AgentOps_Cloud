@@ -12,6 +12,24 @@ interface TemplateDesignerProps {
   onClose: () => void;
 }
 
+/**
+ * Normalize a raw value to a pdfme-compatible image content string.
+ * pdfme image fields require a base64 data URI (data:image/...;base64,...).
+ * - Already a data URI → pass through
+ * - Raw base64 (no spaces, no protocol) → prepend data:image/jpeg;base64,
+ * - URL (http/https) → return empty string (can't fetch synchronously in designer)
+ * - Anything else → empty string (pdfme shows placeholder)
+ */
+function toImageContent(val: unknown): string {
+  if (val === undefined || val === null) return "";
+  const str = String(val).trim();
+  if (!str) return "";
+  if (str.startsWith("data:")) return str; // already a data URI
+  if (str.startsWith("http://") || str.startsWith("https://")) return ""; // URL — not usable as inline content
+  // Treat as raw base64
+  return `data:image/jpeg;base64,${str}`;
+}
+
 /** Build pdfme sampledata from current schema field names, mappings, and real row data */
 function buildSampledata(
   schemas: unknown,
@@ -25,9 +43,14 @@ function buildSampledata(
     for (const field of fields) {
       const name = (field as any)?.name;
       if (!name) continue;
+      const fieldType = (field as any)?.type;
       const mappedKey = fieldMappings[name];
       const val = mappedKey !== undefined ? sampleRow[mappedKey] : undefined;
-      data[name] = val !== undefined && val !== null ? String(val) : `{${name}}`;
+      if (val !== undefined && val !== null) {
+        data[name] = fieldType === "image" ? toImageContent(val) : String(val);
+      } else {
+        data[name] = fieldType === "image" ? "" : `{${name}}`;
+      }
     }
   }
   return [data];
@@ -50,7 +73,9 @@ function injectSampleValues(
       const mappedKey = fieldMappings[field.name];
       const val = mappedKey !== undefined ? sampleRow[mappedKey] : undefined;
       if (val !== undefined && val !== null && String(val).trim() !== "") {
-        return { ...field, content: String(val) };
+        const content =
+          field.type === "image" ? toImageContent(val) : String(val);
+        return { ...field, content };
       }
       return field;
     });
@@ -85,6 +110,36 @@ export default function TemplateDesigner({
   const [schemaFields, setSchemaFields] = useState<string[]>([]);
   const [draggedField, setDraggedField] = useState<{ key: string; label: string } | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
+  // resolvedSampleRow: same as sampleRow but URL image values are fetched → base64 data URIs
+  const [resolvedSampleRow, setResolvedSampleRow] = useState<Record<string, unknown>>(sampleRow);
+
+  // When sampleRow changes, resolve any URL-based image values to base64 data URIs.
+  // This lets the designer preview render actual images from remote URLs.
+  useEffect(() => {
+    let cancelled = false;
+    async function resolveSampleRow() {
+      const resolved: Record<string, unknown> = { ...sampleRow };
+      await Promise.all(
+        Object.entries(sampleRow).map(async ([key, val]) => {
+          const str = val != null ? String(val).trim() : "";
+          if (str.startsWith("http://") || str.startsWith("https://")) {
+            try {
+              const res = await fetch(str);
+              const buf = await res.arrayBuffer();
+              const mime = res.headers.get("content-type") || "image/jpeg";
+              const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+              if (!cancelled) resolved[key] = `data:${mime};base64,${b64}`;
+            } catch {
+              // leave as-is if fetch fails
+            }
+          }
+        }),
+      );
+      if (!cancelled) setResolvedSampleRow(resolved);
+    }
+    void resolveSampleRow();
+    return () => { cancelled = true; };
+  }, [sampleRow]);
 
   // Load template data
   useEffect(() => {
@@ -165,12 +220,12 @@ export default function TemplateDesigner({
 
       // Inject real values into field content so Designer shows them immediately
       const activeMappings = initialMappings ?? fieldMappings;
-      const enrichedSchemas = injectSampleValues(schemas, activeMappings, sampleRow);
+      const enrichedSchemas = injectSampleValues(schemas, activeMappings, resolvedSampleRow);
 
       const template = {
         basePdf,
         schemas: enrichedSchemas,
-        sampledata: buildSampledata(enrichedSchemas, activeMappings, sampleRow),
+        sampledata: buildSampledata(enrichedSchemas, activeMappings, resolvedSampleRow),
       };
 
       // Clear any existing designer
@@ -222,14 +277,14 @@ export default function TemplateDesigner({
     if (!designerRef.current) return;
     isSampledataUpdateRef.current = true;
     const tmpl = designerRef.current.getTemplate();
-    const updatedSchemas = injectSampleValues(tmpl.schemas, fieldMappings, sampleRow);
+    const updatedSchemas = injectSampleValues(tmpl.schemas, fieldMappings, resolvedSampleRow);
     designerRef.current.updateTemplate({
       ...tmpl,
       schemas: updatedSchemas,
-      sampledata: buildSampledata(updatedSchemas, fieldMappings, sampleRow),
+      sampledata: buildSampledata(updatedSchemas, fieldMappings, resolvedSampleRow),
     });
     setTimeout(() => { isSampledataUpdateRef.current = false; }, 50);
-  }, [fieldMappings, sampleRow]);
+  }, [fieldMappings, resolvedSampleRow]);
 
   // Upload base PDF
   async function handlePdfUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -317,13 +372,21 @@ export default function TemplateDesigner({
     while (existingNames.has(candidate)) { candidate = `${fieldName}_${n++}`; }
     fieldName = candidate;
 
-    // Insert into pdfme template — set `content` to real value so it shows immediately in preview
+    // Insert into pdfme template — set `content` to real value so it shows immediately in preview.
+    // Detect image fields: if the resolved value looks like a data URI or base64, use image type.
     const tmpl = designerRef.current.getTemplate();
-    const realVal = sampleRow[draggedField.key];
-    const previewContent = realVal !== undefined && realVal !== null && String(realVal).trim() !== ""
-      ? String(realVal)
-      : draggedField.label;
-    const newField = { name: fieldName, type: "text", position: { x: pdfX, y: pdfY }, width: 60, height: 8, fontSize: 10, fontColor: "#000000", content: previewContent };
+    const realVal = resolvedSampleRow[draggedField.key];
+    const realStr = realVal !== undefined && realVal !== null ? String(realVal).trim() : "";
+    const isImageValue =
+      realStr.startsWith("data:image") ||
+      (realStr.length > 100 && !realStr.includes(" ") && !realStr.startsWith("http"));
+    const fieldType = isImageValue ? "image" : "text";
+    const previewContent = isImageValue
+      ? toImageContent(realVal)
+      : realStr || draggedField.label;
+    const newField = isImageValue
+      ? { name: fieldName, type: "image", position: { x: pdfX, y: pdfY }, width: 40, height: 40, content: previewContent }
+      : { name: fieldName, type: "text", position: { x: pdfX, y: pdfY }, width: 60, height: 8, fontSize: 10, fontColor: "#000000", content: previewContent };
     const pages = tmpl.schemas.length > 0 ? [...tmpl.schemas] : [[]];
     pages[0] = Array.isArray(pages[0]) ? [...(pages[0] as any[]), newField] : [...Object.values(pages[0] as object), newField];
 
@@ -332,11 +395,11 @@ export default function TemplateDesigner({
     const newSchemas = pages;
     setSchemaFields(extractFieldNames(newSchemas));
 
-    const enrichedSchemas = injectSampleValues(newSchemas, newMappings, sampleRow);
+    const enrichedSchemas = injectSampleValues(newSchemas, newMappings, resolvedSampleRow);
     designerRef.current.updateTemplate({
       ...tmpl,
       schemas: enrichedSchemas,
-      sampledata: buildSampledata(enrichedSchemas, newMappings, sampleRow),
+      sampledata: buildSampledata(enrichedSchemas, newMappings, resolvedSampleRow),
     });
     setDraggedField(null);
   }
