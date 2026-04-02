@@ -929,16 +929,28 @@ export function agentWorkspaceTemplateRoutes() {
         writeFileSync(localPath, pdfBuffer);
         const localKey = `local:templates/${companyId}/${templateId}/base.pdf`;
 
-        // Update template record
+        // Extract AcroForm fields (fillable PDF detection)
+        const { extractFormFields } = await import("../services/pdfGenerationService.js");
+        const formFields = await extractFormFields(pdfBuffer);
+        const templateMode = formFields.length > 0 ? "form_fill" : "overlay";
+
+        // Update template record with mode + form fields
         await db.execute(sql`
           UPDATE workspace_templates SET
             base_pdf_key = ${localKey},
             type = 'pdf',
+            pdfme_schema = ${JSON.stringify(templateMode === "form_fill" ? { mode: "form_fill", form_fields: formFields } : null)},
             updated_at = NOW()
           WHERE id = ${templateId} AND company_id = ${companyId}
         `);
 
-        res.json({ ok: true, base_pdf_key: localKey, size: pdfBuffer.length });
+        res.json({
+          ok: true,
+          base_pdf_key: localKey,
+          size: pdfBuffer.length,
+          mode: templateMode,
+          form_fields: formFields,
+        });
       } catch (err) {
         console.error("[upload-pdf] error:", err);
         next(err);

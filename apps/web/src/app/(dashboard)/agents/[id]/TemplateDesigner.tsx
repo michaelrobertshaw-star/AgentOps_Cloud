@@ -12,25 +12,22 @@ interface TemplateDesignerProps {
   onClose: () => void;
 }
 
-/**
- * Normalize a raw value to a pdfme-compatible image content string.
- * pdfme image fields require a base64 data URI (data:image/...;base64,...).
- * - Already a data URI → pass through
- * - Raw base64 (no spaces, no protocol) → prepend data:image/jpeg;base64,
- * - URL (http/https) → return empty string (can't fetch synchronously in designer)
- * - Anything else → empty string (pdfme shows placeholder)
- */
+interface PdfFormField {
+  name: string;
+  type: "text" | "checkbox" | "dropdown" | "radio" | "signature" | "unknown";
+}
+
+// ── Shared helpers ──────────────────────────────────────────────
+
 function toImageContent(val: unknown): string {
   if (val === undefined || val === null) return "";
   const str = String(val).trim();
   if (!str) return "";
-  if (str.startsWith("data:")) return str; // already a data URI
-  if (str.startsWith("http://") || str.startsWith("https://")) return ""; // URL — not usable as inline content
-  // Treat as raw base64
+  if (str.startsWith("data:")) return str;
+  if (str.startsWith("http://") || str.startsWith("https://")) return "";
   return `data:image/jpeg;base64,${str}`;
 }
 
-/** Build pdfme sampledata from current schema field names, mappings, and real row data */
 function buildSampledata(
   schemas: unknown,
   fieldMappings: Record<string, string>,
@@ -56,16 +53,12 @@ function buildSampledata(
   return [data];
 }
 
-/**
- * Inject real sample values into each field's `content` property.
- * pdfme Designer uses `content` for the visual preview (not `sampledata`).
- * `sampledata` is only used by @pdfme/generator at generation time.
- */
 function injectSampleValues(
-  schemas: any[][],
+  schemas: unknown,
   fieldMappings: Record<string, string>,
   sampleRow: Record<string, unknown>,
-): any[][] {
+): unknown {
+  if (!Array.isArray(schemas)) return schemas;
   return schemas.map((page: any) => {
     const fields = Array.isArray(page) ? page : Object.values(page as object);
     return fields.map((field: any) => {
@@ -82,39 +75,40 @@ function injectSampleValues(
   });
 }
 
-/**
- * pdfme Template Designer — embedded in a full-screen modal.
- * Allows the user to:
- * 1. Upload a base PDF
- * 2. Place text/image fields on the PDF (drag & drop)
- * 3. Name fields that map to data columns
- * 4. Save the schema + field mappings
- */
+// ── Main component ──────────────────────────────────────────────
+
 export default function TemplateDesigner({
   templateId,
   availableFields,
-  sampleRow = {},
+  sampleRow: sampleRowProp = {},
   onSave,
   onClose,
 }: TemplateDesignerProps) {
   const designerContainerRef = useRef<HTMLDivElement>(null);
   const designerRef = useRef<any>(null);
+  const isSampledataUpdateRef = useRef(false);
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isSampledataUpdateRef = useRef(false); // prevents sampledata updates from triggering auto-save
+  const sampleRow = sampleRowProp;
+
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [basePdfUploaded, setBasePdfUploaded] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [autoSaveStatus, setAutoSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [fieldMappings, setFieldMappings] = useState<Record<string, string>>({});
+  const [autoSaveStatus, setAutoSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [schemaFields, setSchemaFields] = useState<string[]>([]);
   const [draggedField, setDraggedField] = useState<{ key: string; label: string } | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
-  // resolvedSampleRow: same as sampleRow but URL image values are fetched → base64 data URIs
+
+  // Form-fill mode state
+  const [mode, setMode] = useState<"overlay" | "form_fill" | null>(null);
+  const [formFields, setFormFields] = useState<PdfFormField[]>([]);
+  const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
+  const [fieldSearch, setFieldSearch] = useState("");
+
+  // resolvedSampleRow: URL image values fetched → base64 data URIs
   const [resolvedSampleRow, setResolvedSampleRow] = useState<Record<string, unknown>>(sampleRow);
 
-  // When sampleRow changes, resolve any URL-based image values to base64 data URIs.
-  // This lets the designer preview render actual images from remote URLs.
   useEffect(() => {
     let cancelled = false;
     async function resolveSampleRow() {
@@ -127,7 +121,6 @@ export default function TemplateDesigner({
               const res = await fetch(str);
               const buf = await res.arrayBuffer();
               const mime = res.headers.get("content-type") || "image/jpeg";
-              // Chunked base64 conversion — spread operator crashes on large arrays
               const bytes = new Uint8Array(buf);
               let binary = "";
               for (let j = 0; j < bytes.length; j++) {
@@ -136,7 +129,7 @@ export default function TemplateDesigner({
               const b64 = btoa(binary);
               if (!cancelled) resolved[key] = `data:${mime};base64,${b64}`;
             } catch {
-              // leave as-is if fetch fails
+              // leave as-is
             }
           }
         }),
@@ -154,19 +147,35 @@ export default function TemplateDesigner({
         const res = await fetchWithTenant(`/api/workspace/templates/${templateId}`);
         if (!res.ok) throw new Error("Failed to load template");
         const tmpl = await res.json();
-        // Flush all state + set loading=false together so the designer div
-        // is in the DOM (not the spinner) before initDesigner runs
+
+        // Detect mode from stored schema
+        const schema = tmpl.pdfme_schema;
+        const isFormFill = schema?.mode === "form_fill";
+
         flushSync(() => {
           setBasePdfUploaded(!!tmpl.base_pdf_key);
           setFieldMappings(tmpl.field_mappings ?? {});
-          if (tmpl.pdfme_schema) {
-            setSchemaFields(extractFieldNames(tmpl.pdfme_schema));
+          setMode(isFormFill ? "form_fill" : "overlay");
+          if (isFormFill && schema.form_fields) {
+            setFormFields(schema.form_fields);
+          }
+          if (schema && !isFormFill) {
+            setSchemaFields(extractFieldNames(schema));
           }
           setLoading(false);
         });
 
-        // Initialize pdfme designer if base PDF exists — pass mappings explicitly to avoid stale closure
-        if (tmpl.base_pdf_key) {
+        // Form fill mode: show PDF in iframe
+        if (isFormFill && tmpl.base_pdf_key) {
+          const pdfRes = await fetchWithTenant(`/api/workspace/templates/${templateId}/base-pdf`);
+          if (pdfRes.ok) {
+            const blob = await pdfRes.blob();
+            setPdfPreviewUrl(URL.createObjectURL(blob));
+          }
+        }
+
+        // Overlay mode: init pdfme designer
+        if (!isFormFill && tmpl.base_pdf_key) {
           await initDesigner(tmpl, tmpl.field_mappings ?? {});
         }
       } catch (err) {
@@ -175,8 +184,23 @@ export default function TemplateDesigner({
       }
     }
     loadTemplate();
+    return () => {
+      // Cleanup designer on unmount
+      if (designerRef.current) {
+        designerRef.current.destroy();
+        designerRef.current = null;
+      }
+      if (autoSaveTimerRef.current) {
+        clearTimeout(autoSaveTimerRef.current);
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [templateId]);
+
+  // Cleanup blob URL on unmount
+  useEffect(() => {
+    return () => { if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl); };
+  }, [pdfPreviewUrl]);
 
   function extractFieldNames(schema: unknown): string[] {
     if (!Array.isArray(schema)) return [];
@@ -197,34 +221,21 @@ export default function TemplateDesigner({
     return names;
   }
 
+  // ── pdfme overlay mode functions ──
+
   async function initDesigner(tmpl: any, initialMappings?: Record<string, string>) {
     if (!designerContainerRef.current) return;
-
     try {
-      // Dynamic import of pdfme/ui (client-side only)
       const { Designer } = await import("@pdfme/ui");
       const { text, image } = await import("@pdfme/schemas");
 
-      // Fetch base PDF
       const pdfRes = await fetchWithTenant(`/api/workspace/templates/${templateId}/base-pdf`);
       if (!pdfRes.ok) throw new Error("Failed to load base PDF");
       const pdfBlob = await pdfRes.blob();
       const pdfArrayBuffer = await pdfBlob.arrayBuffer();
       const basePdf = new Uint8Array(pdfArrayBuffer);
 
-      // Build template
-      const schemas = tmpl.pdfme_schema ?? [[
-        {
-          name: "field_1",
-          type: "text",
-          position: { x: 20, y: 20 },
-          width: 100,
-          height: 10,
-          fontSize: 12,
-        },
-      ]];
-
-      // Inject real values into field content so Designer shows them immediately
+      const schemas = tmpl.pdfme_schema ?? [[{ name: "field_1", type: "text", position: { x: 20, y: 20 }, width: 100, height: 10, fontSize: 12 }]];
       const activeMappings = initialMappings ?? fieldMappings;
       const enrichedSchemas = injectSampleValues(schemas, activeMappings, resolvedSampleRow);
 
@@ -232,12 +243,9 @@ export default function TemplateDesigner({
         basePdf,
         schemas: enrichedSchemas,
         sampledata: buildSampledata(enrichedSchemas, activeMappings, resolvedSampleRow),
-      };
+      } as any;
 
-      // Clear any existing designer
-      if (designerRef.current) {
-        designerRef.current.destroy();
-      }
+      if (designerRef.current) designerRef.current.destroy();
 
       designerRef.current = new Designer({
         domContainer: designerContainerRef.current,
@@ -245,15 +253,10 @@ export default function TemplateDesigner({
         plugins: { text, image },
       });
 
-      // Listen for template changes — track fields + auto-save schema to DB
       designerRef.current.onChangeTemplate((t: any) => {
         const fields = extractFieldNames(t.schemas);
         setSchemaFields(fields);
-
-        // Skip auto-save when we triggered the change ourselves (sampledata update)
         if (isSampledataUpdateRef.current) return;
-
-        // Debounced auto-save: 800ms after last change (captures color, font, position, etc.)
         if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
         setAutoSaveStatus("saving");
         autoSaveTimerRef.current = setTimeout(async () => {
@@ -276,11 +279,9 @@ export default function TemplateDesigner({
     }
   }
 
-  // Live preview: inject real values into field `content` AND sampledata whenever mappings change.
-  // pdfme Designer renders from `content`; sampledata is used by the generator.
-  // Use loop guard so this doesn't trigger auto-save.
+  // Live preview for overlay mode
   useEffect(() => {
-    if (!designerRef.current) return;
+    if (mode !== "overlay" || !designerRef.current) return;
     isSampledataUpdateRef.current = true;
     const tmpl = designerRef.current.getTemplate();
     const updatedSchemas = injectSampleValues(tmpl.schemas, fieldMappings, resolvedSampleRow);
@@ -290,7 +291,7 @@ export default function TemplateDesigner({
       sampledata: buildSampledata(updatedSchemas, fieldMappings, resolvedSampleRow),
     });
     setTimeout(() => { isSampledataUpdateRef.current = false; }, 50);
-  }, [fieldMappings, resolvedSampleRow]);
+  }, [fieldMappings, resolvedSampleRow, mode]);
 
   // Upload base PDF
   async function handlePdfUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -314,38 +315,55 @@ export default function TemplateDesigner({
         throw new Error(`Upload failed (${res.status}): ${errBody?.error ?? errBody?.raw ?? "unknown error"}`);
       }
 
-      // Reload template first, then flush state + loading=false together
-      // so the designer div is in the DOM (not the spinner) before initDesigner
-      const tmplRes = await fetchWithTenant(`/api/workspace/templates/${templateId}`);
-      const tmpl = await tmplRes.json();
-      flushSync(() => {
-        setBasePdfUploaded(true);
-        setLoading(false);
-      });
-      await initDesigner(tmpl);
+      const result = await res.json();
+
+      if (result.mode === "form_fill") {
+        // Form-fill mode: show field mapping UI with real PDF preview
+        flushSync(() => {
+          setMode("form_fill");
+          setFormFields(result.form_fields ?? []);
+          setBasePdfUploaded(true);
+          setLoading(false);
+        });
+        // Load PDF for preview
+        const pdfRes = await fetchWithTenant(`/api/workspace/templates/${templateId}/base-pdf`);
+        if (pdfRes.ok) {
+          const blob = await pdfRes.blob();
+          if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl);
+          setPdfPreviewUrl(URL.createObjectURL(blob));
+        }
+      } else {
+        // Overlay mode: init pdfme designer
+        const tmplRes = await fetchWithTenant(`/api/workspace/templates/${templateId}`);
+        const tmpl = await tmplRes.json();
+        flushSync(() => {
+          setMode("overlay");
+          setBasePdfUploaded(true);
+          setLoading(false);
+        });
+        await initDesigner(tmpl);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
       setLoading(false);
     }
   }
 
-  // Save schema + field mappings
+  // Save field mappings
   const handleSave = useCallback(async () => {
     setSaving(true);
     try {
-      let pdfmeSchema = null;
-      if (designerRef.current) {
-        const template = designerRef.current.getTemplate();
-        pdfmeSchema = template.schemas;
+      const body: any = { field_mappings: fieldMappings };
+
+      if (mode === "overlay" && designerRef.current) {
+        body.pdfme_schema = designerRef.current.getTemplate().schemas;
       }
+      // form_fill mode: pdfme_schema already has { mode, form_fields } — just update field_mappings
 
       await fetchWithTenant(`/api/workspace/templates/${templateId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pdfme_schema: pdfmeSchema,
-          field_mappings: fieldMappings,
-        }),
+        body: JSON.stringify(body),
       });
 
       onSave();
@@ -354,9 +372,9 @@ export default function TemplateDesigner({
     } finally {
       setSaving(false);
     }
-  }, [templateId, fieldMappings, onSave]);
+  }, [templateId, fieldMappings, mode, onSave]);
 
-  /** Handles a column pill being dropped onto the PDF canvas */
+  // ── Overlay mode: column drop handler ──
   function handleColumnDrop(e: React.DragEvent<HTMLDivElement>) {
     e.preventDefault();
     setIsDragOver(false);
@@ -365,11 +383,9 @@ export default function TemplateDesigner({
     const container = e.currentTarget.getBoundingClientRect();
     const relX = (e.clientX - container.left) / container.width;
     const relY = (e.clientY - container.top) / container.height;
-    // Approximate PDF mm coords (A4: 210 × 297mm, pdfme has ~10mm internal margins)
     const pdfX = Math.max(5, Math.min(175, relX * 210 - 5));
     const pdfY = Math.max(5, Math.min(280, relY * 297));
 
-    // Unique field name from column key
     const existingNames = new Set(schemaFields);
     let fieldName = draggedField.key.replace(/[^a-zA-Z0-9_]/g, "_").replace(/^_+|_+$/g, "");
     if (!fieldName) fieldName = "field";
@@ -378,8 +394,6 @@ export default function TemplateDesigner({
     while (existingNames.has(candidate)) { candidate = `${fieldName}_${n++}`; }
     fieldName = candidate;
 
-    // Insert into pdfme template — set `content` to real value so it shows immediately in preview.
-    // Detect image fields: if the resolved value looks like a data URI or base64, use image type.
     const tmpl = designerRef.current.getTemplate();
     const realVal = resolvedSampleRow[draggedField.key];
     const realStr = realVal !== undefined && realVal !== null ? String(realVal).trim() : "";
@@ -410,14 +424,33 @@ export default function TemplateDesigner({
     setDraggedField(null);
   }
 
+  // ── Render ──
+
+  const filteredFormFields = fieldSearch
+    ? formFields.filter((f) => f.name.toLowerCase().includes(fieldSearch.toLowerCase()))
+    : formFields;
+
+  const mappedCount = formFields.filter((f) => fieldMappings[f.name]).length;
+
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center">
       <div className="bg-white rounded-xl shadow-2xl w-[95vw] h-[90vh] flex flex-col overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 bg-gray-50">
-          <h2 className="text-lg font-bold text-gray-800">Template Designer</h2>
           <div className="flex items-center gap-3">
-            {/* Auto-save status */}
+            <h2 className="text-lg font-bold text-gray-800">Template Designer</h2>
+            {mode === "form_fill" && (
+              <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-bold uppercase rounded">
+                Form Fill Mode
+              </span>
+            )}
+            {mode === "overlay" && (
+              <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-[10px] font-bold uppercase rounded">
+                Overlay Mode
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-3">
             {autoSaveStatus === "saving" && (
               <span className="flex items-center gap-1.5 text-xs text-gray-500">
                 <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -461,9 +494,10 @@ export default function TemplateDesigner({
         )}
 
         <div className="flex flex-1 overflow-hidden">
-          {/* Left: PDF Designer Canvas */}
+          {/* Left: PDF canvas / preview */}
           <div className="flex-1 flex flex-col relative">
             {!basePdfUploaded ? (
+              /* Upload prompt */
               <div className="flex-1 flex items-center justify-center">
                 <div className="text-center space-y-4">
                   <div className="w-20 h-20 mx-auto bg-gray-100 rounded-2xl flex items-center justify-center">
@@ -473,7 +507,10 @@ export default function TemplateDesigner({
                   </div>
                   <div>
                     <p className="text-lg font-medium text-gray-700">Upload your PDF template</p>
-                    <p className="text-sm text-gray-400 mt-1">This will be the base document. You&apos;ll place data fields on top of it.</p>
+                    <p className="text-sm text-gray-400 mt-1">
+                      Fillable PDFs: form fields are detected automatically — just map data columns.<br/>
+                      Flat PDFs: drag-and-drop text fields onto the document.
+                    </p>
                   </div>
                   <label className="inline-flex items-center gap-2 px-5 py-2.5 bg-green-600 hover:bg-green-700 text-white font-medium rounded-lg cursor-pointer transition-colors">
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -488,8 +525,23 @@ export default function TemplateDesigner({
               <div className="flex-1 flex items-center justify-center">
                 <div className="animate-spin h-8 w-8 border-3 border-green-500 border-t-transparent rounded-full" />
               </div>
+            ) : mode === "form_fill" ? (
+              /* Form fill mode: show actual PDF in iframe (preserves dimensions, fonts, everything) */
+              <div className="flex-1 w-full" style={{ minHeight: 0 }}>
+                {pdfPreviewUrl ? (
+                  <iframe
+                    src={pdfPreviewUrl}
+                    className="w-full h-full border-0"
+                    title="PDF Preview"
+                  />
+                ) : (
+                  <div className="flex-1 flex items-center justify-center text-gray-400">
+                    Loading PDF preview...
+                  </div>
+                )}
+              </div>
             ) : (
-              // Drop zone wraps pdfme so columns can be dragged onto the PDF
+              /* Overlay mode: pdfme designer canvas */
               <div
                 className="flex-1 w-full relative"
                 style={{ minHeight: 0 }}
@@ -497,7 +549,6 @@ export default function TemplateDesigner({
                 onDragLeave={() => setIsDragOver(false)}
                 onDrop={handleColumnDrop}
               >
-                {/* Drop overlay hint */}
                 {isDragOver && draggedField && (
                   <div className="absolute inset-0 z-10 pointer-events-none border-2 border-dashed border-green-500 rounded flex items-center justify-center bg-green-50/30">
                     <div className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-lg">
@@ -510,11 +561,119 @@ export default function TemplateDesigner({
             )}
           </div>
 
-          {/* Right: Data Columns + Mapped Fields Panel */}
-          {basePdfUploaded && (
-            <div className="w-72 border-l border-gray-200 bg-gray-50 flex flex-col overflow-hidden">
+          {/* Right panel */}
+          {basePdfUploaded && !loading && mode === "form_fill" && (
+            /* ── Form Fill Mode: field mapping panel ── */
+            <div className="w-80 border-l border-gray-200 bg-gray-50 flex flex-col overflow-hidden">
+              {/* Header with stats */}
+              <div className="p-4 border-b border-gray-200">
+                <h3 className="text-sm font-bold text-gray-800">PDF Form Fields</h3>
+                <p className="text-[11px] text-gray-500 mt-1">
+                  {formFields.length} fields detected — map each to a data column
+                </p>
+                <div className="flex items-center gap-2 mt-2">
+                  <div className="flex-1 bg-gray-200 rounded-full h-1.5">
+                    <div
+                      className="bg-green-500 h-1.5 rounded-full transition-all"
+                      style={{ width: `${formFields.length > 0 ? (mappedCount / formFields.length) * 100 : 0}%` }}
+                    />
+                  </div>
+                  <span className="text-[10px] text-gray-500 font-medium">{mappedCount}/{formFields.length}</span>
+                </div>
+              </div>
 
-              {/* Section 1: Mapped fields (only what's been linked) */}
+              {/* Search */}
+              <div className="px-4 py-2 border-b border-gray-200">
+                <input
+                  type="text"
+                  value={fieldSearch}
+                  onChange={(e) => setFieldSearch(e.target.value)}
+                  placeholder="Search fields..."
+                  className="w-full px-2.5 py-1.5 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300"
+                />
+              </div>
+
+              {/* Field list */}
+              <div className="flex-1 overflow-y-auto p-3 space-y-2">
+                {filteredFormFields.map((ff) => {
+                  const mapped = fieldMappings[ff.name];
+                  const mappedLabel = mapped ? availableFields.find((f) => f.key === mapped)?.label ?? mapped : null;
+                  const preview = mapped ? sampleRow[mapped] : null;
+
+                  return (
+                    <div
+                      key={ff.name}
+                      className={`rounded-lg border p-2.5 transition-colors ${
+                        mapped ? "bg-green-50 border-green-200" : "bg-white border-gray-200"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1.5">
+                        <div className="flex items-center gap-1.5">
+                          {mapped && (
+                            <svg className="w-3.5 h-3.5 text-green-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7"/>
+                            </svg>
+                          )}
+                          <span className="text-xs font-medium text-gray-800 truncate" title={ff.name}>{ff.name}</span>
+                        </div>
+                        <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${
+                          ff.type === "text" ? "bg-blue-100 text-blue-600" :
+                          ff.type === "checkbox" ? "bg-amber-100 text-amber-600" :
+                          ff.type === "dropdown" ? "bg-purple-100 text-purple-600" :
+                          ff.type === "signature" ? "bg-pink-100 text-pink-600" :
+                          "bg-gray-100 text-gray-500"
+                        }`}>
+                          {ff.type}
+                        </span>
+                      </div>
+
+                      <select
+                        value={mapped ?? ""}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setFieldMappings((prev) => {
+                            if (!val) {
+                              const n = { ...prev };
+                              delete n[ff.name];
+                              return n;
+                            }
+                            return { ...prev, [ff.name]: val };
+                          });
+                        }}
+                        className="w-full px-2 py-1 text-xs border border-gray-300 rounded-md bg-white focus:outline-none focus:ring-1 focus:ring-green-400"
+                      >
+                        <option value="">— Select data column —</option>
+                        {availableFields.map((af) => (
+                          <option key={af.key} value={af.key}>
+                            {af.label}
+                          </option>
+                        ))}
+                      </select>
+
+                      {/* Preview value */}
+                      {mapped && preview !== undefined && preview !== null && (
+                        <div className="mt-1.5 text-[10px] text-gray-500 truncate" title={String(preview)}>
+                          Preview: <span className="text-gray-700 font-medium">{String(preview).slice(0, 60)}</span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Footer: replace PDF */}
+              <div className="p-3 border-t border-gray-200">
+                <label className="inline-flex items-center gap-1 px-3 py-1.5 bg-gray-200 hover:bg-gray-300 text-gray-700 text-xs font-medium rounded-lg cursor-pointer w-full justify-center">
+                  Replace Base PDF
+                  <input type="file" accept=".pdf" onChange={handlePdfUpload} className="hidden" />
+                </label>
+              </div>
+            </div>
+          )}
+
+          {basePdfUploaded && !loading && mode === "overlay" && (
+            /* ── Overlay Mode: drag-drop panel (existing) ── */
+            <div className="w-72 border-l border-gray-200 bg-gray-50 flex flex-col overflow-hidden">
               <div className="p-4 border-b border-gray-200 overflow-y-auto" style={{ maxHeight: "45%" }}>
                 <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2">
                   Mapped Fields {schemaFields.filter(f => fieldMappings[f]).length > 0 && `(${schemaFields.filter(f => fieldMappings[f]).length})`}
@@ -552,7 +711,6 @@ export default function TemplateDesigner({
                 )}
               </div>
 
-              {/* Section 2: Draggable data columns */}
               <div className="flex-1 p-4 overflow-y-auto">
                 <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Data Columns</h3>
                 <p className="text-[10px] text-gray-400 mb-3">Drag onto PDF to place a field</p>
@@ -580,7 +738,6 @@ export default function TemplateDesigner({
                 </div>
               </div>
 
-              {/* Footer: replace PDF */}
               <div className="p-3 border-t border-gray-200">
                 <label className="inline-flex items-center gap-1 px-3 py-1.5 bg-gray-200 hover:bg-gray-300 text-gray-700 text-xs font-medium rounded-lg cursor-pointer w-full justify-center">
                   Replace Base PDF

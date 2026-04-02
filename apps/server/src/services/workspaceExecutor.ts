@@ -484,28 +484,53 @@ export async function executeWorkflowPipeline(
             }
 
             const tmpl = tmplRows[0];
-            if (!tmpl.base_pdf_key || !tmpl.pdfme_schema) {
+            if (!tmpl.base_pdf_key) {
               stepResults.push({
                 stepId: step.id, label: step.label, status: "error",
                 rowCount: 0, duration_ms: Date.now() - stepStartMs,
-                message: "Template missing base PDF or schema — open the template designer to complete setup",
+                message: "Template missing base PDF — open the template designer to upload a PDF",
               });
               break;
             }
 
-            const { generateBatchPdfs } = await import("./pdfGenerationService.js");
             const fieldMappings = (tmpl.field_mappings ?? {}) as Record<string, string>;
             const pattern = cfg.filename_pattern || "{trip_id}-{name}.pdf";
 
-            const pdfResults = await generateBatchPdfs(
-              tmpl.base_pdf_key,
-              tmpl.pdfme_schema,
-              fieldMappings,
-              dataset,
-              companyId,
-              runId,
-              pattern,
-            );
+            // Detect mode: form_fill (pdf-lib, preserves original) vs overlay (pdfme)
+            const schema = tmpl.pdfme_schema as any;
+            const isFormFill = schema?.mode === "form_fill";
+
+            let pdfResults: Array<{ filename: string; s3Key: string; rowIndex: number }>;
+            if (isFormFill) {
+              const { generateBatchFormFillPdfs } = await import("./pdfGenerationService.js");
+              pdfResults = await generateBatchFormFillPdfs(
+                tmpl.base_pdf_key,
+                fieldMappings,
+                dataset,
+                companyId,
+                runId,
+                pattern,
+              );
+            } else {
+              if (!tmpl.pdfme_schema) {
+                stepResults.push({
+                  stepId: step.id, label: step.label, status: "error",
+                  rowCount: 0, duration_ms: Date.now() - stepStartMs,
+                  message: "Template missing schema — open the template designer to complete setup",
+                });
+                break;
+              }
+              const { generateBatchPdfs } = await import("./pdfGenerationService.js");
+              pdfResults = await generateBatchPdfs(
+                tmpl.base_pdf_key,
+                tmpl.pdfme_schema,
+                fieldMappings,
+                dataset,
+                companyId,
+                runId,
+                pattern,
+              );
+            }
 
             generatedFiles = pdfResults.map((r) => ({
               filename: r.filename,
