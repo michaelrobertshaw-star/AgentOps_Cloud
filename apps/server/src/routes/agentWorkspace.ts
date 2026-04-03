@@ -1238,11 +1238,46 @@ export function agentWorkspaceTemplateRoutes() {
         const os = await import("os");
         const srcDir = pathMod.resolve(process.cwd(), "uploads/runs", companyId, runId);
 
+        // Build a normalized lookup: both original keys and dot→underscore versions
+        const buildNormalizedRow = (row: Record<string, unknown>): Record<string, unknown> => {
+          const norm: Record<string, unknown> = { ...row };
+          // Add common field aliases for iCabbi fields
+          const aliases: Record<string, string[]> = {
+            booking_id: ["trip_id", "perma_id", "id"],
+            account_name: ["account.name", "account_name"],
+            account_reference: ["account.ref", "account.identifier"],
+            passenger_name: ["name"],
+            driver_name: ["driver.name"],
+            pickup_address: ["address.formatted"],
+            dropoff_address: ["destination.formatted"],
+            fare_amount: ["payment.price", "payment.total", "payment.account_meter"],
+            distance_miles: ["route.actual", "payment.distance_charged"],
+            signature_url: ["payment.signature", "signature_url"],
+          };
+          for (const [alias, sources] of Object.entries(aliases)) {
+            if (!(alias in norm)) {
+              for (const src of sources) {
+                if (norm[src] != null && String(norm[src]).trim() !== "") {
+                  norm[alias] = norm[src];
+                  break;
+                }
+              }
+            }
+          }
+          // Also add dot→underscore versions of all keys
+          for (const [k, v] of Object.entries(row)) {
+            const underscore = k.replace(/\./g, "_");
+            if (!(underscore in norm)) norm[underscore] = v;
+          }
+          return norm;
+        };
+
         // Apply pattern to each row to get target filename
         const applyPattern = (tmpl: string, row: Record<string, unknown>): string => {
+          const norm = buildNormalizedRow(row);
           let fn = tmpl || "{_pdf_file}";
           fn = fn.replace(/\{(\w+)\}/g, (_m, key) => {
-            const val = String(row[key] ?? "").replace(/[/\\:*?"<>|]/g, "_").slice(0, 80);
+            const val = String(norm[key] ?? "").replace(/[/\\:*?"<>|]/g, "_").trim().slice(0, 80);
             return val || "unknown";
           });
           return fn;
