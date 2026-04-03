@@ -1008,6 +1008,23 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
         return { id: p.id, type, config };
       });
       setSteps(loaded);
+
+      // Restore last run for this workflow so Preview button stays visible after page refresh
+      try {
+        const runsRes = await fetchWithTenant(`/api/agents/${agentId}/workspace/runs`);
+        if (runsRes.ok) {
+          const allRuns = await runsRes.json();
+          const lastRun = (allRuns as any[]).find((r: any) => r.workflow_id === id && r.status === "completed");
+          if (lastRun) {
+            // Fetch full run detail (includes output_data)
+            const detailRes = await fetchWithTenant(`/api/agents/${agentId}/workspace/runs/${lastRun.id}`);
+            if (detailRes.ok) {
+              const detail = await detailRes.json();
+              setCurrentRun(detail);
+            }
+          }
+        }
+      } catch {}
     } catch {}
   }
 
