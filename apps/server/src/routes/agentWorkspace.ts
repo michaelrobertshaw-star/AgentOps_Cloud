@@ -446,13 +446,14 @@ Return ONLY valid JSON, no markdown fences.`;
             rows_processed: completedRun?.rows_processed ?? 0,
             duration_ms: completedRun?.duration_ms ?? null,
             error: completedRun?.error ?? null,
+            run_id: runId,
           });
         } finally {
-          // Always clean up temp records
-          try {
-            if (runId) await db.execute(sql`DELETE FROM workspace_runs WHERE id = ${runId}`);
-            await db.execute(sql`DELETE FROM workspace_workflows WHERE id = ${tempWf.id}`);
-          } catch { /* ignore cleanup errors */ }
+          // NOTE: We do NOT delete the temp workflow here because
+          // workspace_runs has ON DELETE CASCADE on workflow_id —
+          // deleting the workflow would also nuke the run record,
+          // breaking PDF preview. The temp workflow is tiny and
+          // can be cleaned up by a periodic job later.
         }
       } catch (err) {
         next(err);
@@ -1034,6 +1035,119 @@ export function agentWorkspaceTemplateRoutes() {
     },
   );
 
+  // GET /api/workspace/templates/:id/annotated-pdf — PDF with field names filled in as labels
+  router.get(
+    "/templates/:id/annotated-pdf",
+    authenticate(),
+    async (req, res, next) => {
+      try {
+        const db = getDb();
+        const companyId = req.companyId!;
+
+        const result = await db.execute(sql`
+          SELECT * FROM workspace_templates WHERE id = ${req.params.id} AND company_id = ${companyId} LIMIT 1
+        `);
+        const rows = ((result as any).rows ?? result) as any[];
+        if (rows.length === 0) return res.status(404).json({ error: "Template not found" });
+
+        const tmpl = rows[0];
+        if (!tmpl.base_pdf_key) return res.status(400).json({ error: "No base PDF" });
+
+        const schema = tmpl.pdfme_schema;
+        const isFormFill = schema?.mode === "form_fill";
+        if (!isFormFill) return res.status(400).json({ error: "Not a form-fill template" });
+
+        const { loadPdfBuffer } = await import("../services/pdfGenerationService.js");
+        const { PDFDocument } = await import("pdf-lib");
+
+        const pdfBuffer = await loadPdfBuffer(tmpl.base_pdf_key);
+        const doc = await PDFDocument.load(pdfBuffer, { ignoreEncryption: true });
+        const form = doc.getForm();
+        const fieldMappings = (tmpl.field_mappings ?? {}) as Record<string, string>;
+
+        // Snapshot fields array — we may remove fields during iteration
+        const allFields = [...form.getFields()];
+
+        // Fill each field with its name or mapped column for visual identification
+        for (const field of allFields) {
+          const name = field.getName();
+          const constructor = field.constructor.name;
+          const mapped = fieldMappings[name];
+          const isStatic = mapped?.startsWith("__static:");
+          const staticVal = isStatic ? mapped.replace("__static:", "") : "";
+
+          // Build display label: mapped column, static value, or field name
+          const label = isStatic
+            ? staticVal
+            : mapped
+              ? `[${mapped}]`
+              : `<${name}>`;
+
+          try {
+            if (constructor === "PDFTextField") {
+              form.getTextField(name).setText(label);
+            } else if (constructor === "PDFCheckBox") {
+              if (isStatic && staticVal === "true") {
+                form.getCheckBox(name).check();
+              } else if (mapped && !isStatic) {
+                form.getCheckBox(name).check(); // Show as checked when mapped to column
+              }
+            } else if (constructor === "PDFRadioGroup") {
+              if (isStatic && staticVal) {
+                try { form.getRadioGroup(name).select(staticVal); } catch { /* option may not exist */ }
+              }
+            } else if (constructor === "PDFSignature") {
+              // Signature visualization is handled by the frontend overlay
+              try { form.removeField(field); } catch { /* ignore */ }
+              continue;
+            } else if (constructor === "PDFDropdown") {
+              // Can't set arbitrary text on dropdowns — leave as-is
+            }
+          } catch { /* skip fields that can't be filled */ }
+        }
+
+        const annotated = await doc.save();
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader("Content-Disposition", `inline; filename="annotated-${req.params.id}.pdf"`);
+        res.send(Buffer.from(annotated));
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // GET /api/workspace/templates/:id/pdf-page-info — page dimensions for each page of the PDF
+  router.get(
+    "/templates/:id/pdf-page-info",
+    authenticate(),
+    async (req, res, next) => {
+      try {
+        const db = getDb();
+        const companyId = req.companyId!;
+        const result = await db.execute(sql`
+          SELECT * FROM workspace_templates WHERE id = ${req.params.id} AND company_id = ${companyId} LIMIT 1
+        `);
+        const rows = ((result as any).rows ?? result) as any[];
+        if (rows.length === 0) return res.status(404).json({ error: "Template not found" });
+        const tmpl = rows[0];
+        if (!tmpl.base_pdf_key) return res.status(400).json({ error: "No base PDF" });
+
+        const { loadPdfBuffer } = await import("../services/pdfGenerationService.js");
+        const { PDFDocument } = await import("pdf-lib");
+        const pdfBuffer = await loadPdfBuffer(tmpl.base_pdf_key);
+        const doc = await PDFDocument.load(pdfBuffer, { ignoreEncryption: true });
+        const pages = doc.getPages().map((p, i) => ({
+          index: i,
+          width: p.getWidth(),
+          height: p.getHeight(),
+        }));
+        res.json({ pages });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
   // GET /api/workspace/runs/:runId/files — list generated files for a run
   router.get(
     "/runs/:runId/files",
@@ -1058,6 +1172,56 @@ export function agentWorkspaceTemplateRoutes() {
     },
   );
 
+  // GET /api/workspace/runs/:runId/file/:filename — serve a generated PDF from a run
+  router.get(
+    "/runs/:runId/file/:filename",
+    authenticate(),
+    async (req, res, next) => {
+      try {
+        const db = getDb();
+        const companyId = req.companyId!;
+        const runId = String(req.params.runId);
+        const filename = String(req.params.filename);
+
+        console.log(`[pdf-preview] runId=${runId} filename=${filename} companyId=${companyId}`);
+
+        // Verify run belongs to this company
+        const result = await db.execute(sql`
+          SELECT id FROM workspace_runs
+          WHERE id = ${runId} AND company_id = ${companyId}
+          LIMIT 1
+        `);
+        const rows = ((result as any).rows ?? result) as any[];
+        if (rows.length === 0) {
+          console.log(`[pdf-preview] Run not found for runId=${runId} companyId=${companyId}`);
+          return res.status(404).json({ error: "Run not found" });
+        }
+
+        // Sanitize filename — strip path traversal
+        const pathMod = await import("path");
+        const safeName = pathMod.basename(filename);
+        const outDir = pathMod.resolve(process.cwd(), "uploads/runs", companyId, runId);
+        const filePath = pathMod.resolve(outDir, safeName);
+        console.log(`[pdf-preview] filePath=${filePath} exists=${(await import("fs")).existsSync(filePath)}`);
+        if (!filePath.startsWith(outDir + pathMod.sep) && filePath !== outDir) {
+          return res.status(400).json({ error: "Invalid filename" });
+        }
+
+        const { existsSync, readFileSync } = await import("fs");
+        if (!existsSync(filePath)) {
+          console.log(`[pdf-preview] File not found: ${filePath}`);
+          return res.status(404).json({ error: "File not found", path: filePath });
+        }
+
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader("Content-Disposition", `inline; filename="${safeName}"`);
+        res.send(readFileSync(filePath));
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
   // DELETE /api/workspace/templates/:id
   router.delete(
     "/templates/:id",
@@ -1070,6 +1234,56 @@ export function agentWorkspaceTemplateRoutes() {
         res.json({ ok: true });
       } catch (err) {
         next(err);
+      }
+    },
+  );
+
+  // Debug: test PDF fill with a specific run row to diagnose signature embedding
+  router.get(
+    "/debug/pdf-sig-test/:runId",
+    authenticate(),
+    async (req, res, next) => {
+      try {
+        const db = getDb();
+        const companyId = req.companyId!;
+        const runId = String(req.params.runId);
+
+        const runResult = await db.execute(sql`SELECT output_data FROM workspace_runs WHERE id = ${runId} AND company_id = ${companyId} LIMIT 1`);
+        const runRows = ((runResult as any).rows ?? runResult) as any[];
+        if (!runRows.length) { res.status(404).json({ error: "run not found" }); return; }
+
+        const outputData = runRows[0].output_data as Record<string, unknown>[];
+        const sigRow = outputData.find((r: any) => typeof r["payment.signature"] === "string" && r["payment.signature"].startsWith("http"));
+        if (!sigRow) { res.json({ ok: false, error: "no row with payment.signature in this run" }); return; }
+
+        const sigUrl = String(sigRow["payment.signature"]);
+        const fetchRes = await fetch(sigUrl, { signal: AbortSignal.timeout(10000) });
+        const fetchOk = fetchRes.ok;
+        const contentType = fetchRes.headers.get("content-type");
+        const bodyBuf = fetchOk ? Buffer.from(await fetchRes.arrayBuffer()) : null;
+
+        const tmplResult = await db.execute(sql`SELECT base_pdf_key, field_mappings FROM workspace_templates WHERE id = '26237577-729b-4000-9810-7cbe77d7b048' AND company_id = ${companyId} LIMIT 1`);
+        const tmplRows = ((tmplResult as any).rows ?? tmplResult) as any[];
+        if (!tmplRows.length) { res.json({ ok: false, error: "template not found" }); return; }
+
+        const { fillPdfForm, loadPdfBuffer } = await import("../services/pdfGenerationService.js");
+        const pdfBuf = await loadPdfBuffer(tmplRows[0].base_pdf_key);
+        const fieldMappings = tmplRows[0].field_mappings as Record<string, string>;
+        const filledPdf = await fillPdfForm(pdfBuf, sigRow, fieldMappings);
+
+        res.json({
+          fetchStatus: fetchRes.status,
+          fetchOk,
+          contentType,
+          imageSizeBytes: bodyBuf?.length ?? 0,
+          fieldMappings,
+          basePdfSize: pdfBuf.length,
+          filledPdfSize: filledPdf.length,
+          signatureEmbedded: filledPdf.length > pdfBuf.length + 5000,
+          sigUrlStart: sigUrl.slice(0, 80),
+        });
+      } catch (err: any) {
+        res.json({ error: String(err.message ?? err), stack: String(err.stack ?? "").slice(0, 500) });
       }
     },
   );
