@@ -236,6 +236,8 @@ export async function executeWorkflowPipeline(
               const dateFrom = cfg.tool_params?.date_from ? new Date(cfg.tool_params.date_from as string) : null;
               const dateTo = cfg.tool_params?.date_to ? new Date(cfg.tool_params.date_to as string + "T23:59:59Z") : null;
               const accountFilter = cfg.tool_params?.account as string | undefined;
+              // min_distance: keep rows where distance OR actual_distance >= this value (miles)
+              const minDistanceMiles = cfg.tool_params?.min_distance != null ? Number(cfg.tool_params.min_distance) : null;
               const ABSOLUTE_MAX = 50_000;
               const WALL_TIMEOUT_MS = 4 * 60 * 1000; // 4 minutes
               let pullSuccess = false;
@@ -293,10 +295,13 @@ export async function executeWorkflowPipeline(
                 let currentOffset = Math.max(0, lo - 500);
                 console.log(`[WorkspaceExec] Binary search done. Forward scan from offset=${currentOffset}`);
 
-                // ── Forward scan with client-side date + account filtering ──
+                // ── Forward scan with client-side date + account + distance filtering ──
                 const SCAN_PAGE = 200;
+                // Account tag pattern: match the tag as a segment (space/hyphen/slash boundary or end-of-string)
+                // e.g. "O198129 SS", "Johnson Eldean T SS - GJ", "SS Transport" all match tag "SS"
+                const escapedAcct = accountFilter?.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") ?? "";
                 const accountPattern = accountFilter
-                  ? new RegExp(`\\b${accountFilter.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i")
+                  ? new RegExp(`(^|[\\s\\-\\/])${escapedAcct}([\\s\\-\\/]|$)`, "i")
                   : null;
                 const allMatchedRows: Record<string, unknown>[] = [];
                 let pageNum = 0;
@@ -336,11 +341,18 @@ export async function executeWorkflowPipeline(
                     const rowDate = new Date(dateStr as string);
                     if (dateFrom && rowDate < dateFrom) continue;
                     if (dateTo && rowDate > dateTo) { afterRangeCount++; continue; }
-                    // Account filter (strict word-boundary match)
+                    // Account tag filter — segment match (space/hyphen/slash boundary)
                     if (accountPattern) {
                       const ref = String(flat["account.ref"] ?? flat["account_ref"] ?? "");
                       const name = String(flat["account.name"] ?? flat["account_name"] ?? "");
-                      if (!accountPattern.test(ref) && !accountPattern.test(name)) continue;
+                      const identifier = String(flat["account.identifier"] ?? "");
+                      if (!accountPattern.test(ref) && !accountPattern.test(name) && !accountPattern.test(identifier)) continue;
+                    }
+                    // Distance filter — keep rows where estimated OR actual distance >= threshold
+                    if (minDistanceMiles !== null) {
+                      const dist = Number(flat["distance"] ?? 0);
+                      const actualDist = Number(flat["actual_distance"] ?? 0);
+                      if (dist < minDistanceMiles && actualDist < minDistanceMiles) continue;
                     }
                     allMatchedRows.push(flat);
                     keptCount++;
@@ -405,18 +417,30 @@ export async function executeWorkflowPipeline(
                   dataset.reverse();
                   console.log(`[WorkspaceExec] pull_data extracted ${dataset.length} records (flattened, newest-first)`);
 
-                  // Post-filter: strict account match (API's account param is loose contains)
+                  // Post-filter: account tag match (segment boundary — space/hyphen/slash)
                   if (accountFilter && dataset.length > 0) {
-                    const pattern = new RegExp(`\\b${accountFilter.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+                    const escapedB = accountFilter.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+                    const patternB = new RegExp(`(^|[\\s\\-\\/])${escapedB}([\\s\\-\\/]|$)`, "i");
                     const before = dataset.length;
                     dataset = dataset.filter(row => {
                       const ref = String(row["account.ref"] ?? row["account_ref"] ?? "");
                       const name = String(row["account.name"] ?? row["account_name"] ?? "");
-                      return pattern.test(ref) || pattern.test(name);
+                      const identifier = String(row["account.identifier"] ?? "");
+                      return patternB.test(ref) || patternB.test(name) || patternB.test(identifier);
                     });
                     if (dataset.length < before) {
-                      console.log(`[WorkspaceExec] Post-filter: "${accountFilter}" kept ${dataset.length}/${before}`);
+                      console.log(`[WorkspaceExec] Post-filter account "${accountFilter}": kept ${dataset.length}/${before}`);
                     }
+                  }
+                  // Post-filter: distance threshold
+                  if (minDistanceMiles !== null && dataset.length > 0) {
+                    const before = dataset.length;
+                    dataset = dataset.filter(row => {
+                      const dist = Number(row["distance"] ?? 0);
+                      const actualDist = Number(row["actual_distance"] ?? 0);
+                      return dist >= minDistanceMiles! || actualDist >= minDistanceMiles!;
+                    });
+                    console.log(`[WorkspaceExec] Post-filter distance ≥${minDistanceMiles}mi: kept ${dataset.length}/${before}`);
                   }
 
                   pullSuccess = true;
@@ -493,7 +517,7 @@ export async function executeWorkflowPipeline(
                 stepId: step.id, label: step.label, status: pullSuccess ? "success" : "error",
                 rowCount: dataset.length, duration_ms: Date.now() - stepStartMs,
                 message: pullSuccess
-                  ? `Retrieved ${dataset.length} records${wantSignature ? " (with signatures)" : ""}${hasDateBounds ? ` from ${cfg.tool_params?.date_from} to ${cfg.tool_params?.date_to}` : ""}`
+                  ? `Retrieved ${dataset.length} records${wantSignature ? " (with signatures)" : ""}${hasDateBounds ? ` from ${cfg.tool_params?.date_from} to ${cfg.tool_params?.date_to}` : ""}${minDistanceMiles !== null ? ` | ≥${minDistanceMiles}mi` : ""}${accountFilter ? ` | account: ${accountFilter}` : ""}`
                   : "Pull failed",
               });
             }
