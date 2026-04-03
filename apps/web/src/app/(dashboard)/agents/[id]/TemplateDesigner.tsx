@@ -261,21 +261,22 @@ export default function TemplateDesigner({
 
         // AI auto-map: if form-fill mode with few/no existing mappings, fuzzy-match field names.
         // Strip legacy __sig_* metadata keys (old drag-overlay system, no longer used).
-        let rawMappings = tmpl.field_mappings ?? {};
-        const cleanMappings: Record<string, string> = {};
-        for (const [k, v] of Object.entries(rawMappings)) {
-          if (!k.startsWith("__sig_")) cleanMappings[k] = v as string;
-        }
-        let initialMappings = cleanMappings;
+        // Keep ALL field_mappings including __sig_* position keys (placement coordinates)
+        let initialMappings: Record<string, string> = { ...(tmpl.field_mappings ?? {}) };
 
         if (isFormFill && schema.form_fields) {
           const allFields = schema.form_fields as PdfFormField[];
-          // Exclude radio fields from coverage — they take static values, not column mappings
+          // Coverage: exclude __sig_* position keys and radio fields from the count
+          const realMappingCount = Object.keys(initialMappings).filter((k) => !k.startsWith("__sig_")).length;
           const mappableFields = allFields.filter((f: PdfFormField) => f.type !== "radio");
-          const coverage = mappableFields.length > 0 ? Object.keys(initialMappings).length / mappableFields.length : 1;
+          const coverage = mappableFields.length > 0 ? realMappingCount / mappableFields.length : 1;
 
           if (coverage < 0.3) {
-            initialMappings = autoMapFields(allFields, availableFields);
+            // Preserve existing __sig_* position keys when re-mapping
+            const posKeys = Object.fromEntries(
+              Object.entries(initialMappings).filter(([k]) => k.startsWith("__sig_")),
+            );
+            initialMappings = { ...autoMapFields(allFields, availableFields), ...posKeys };
             // Persist
             if (Object.keys(initialMappings).length > 0) {
               fetchWithTenant(`/api/workspace/templates/${templateId}`, {
@@ -921,7 +922,9 @@ export default function TemplateDesigner({
                   <h3 className="text-sm font-bold text-gray-800">PDF Form Fields</h3>
                   <button
                     onClick={() => {
-                      const newMappings = autoMapFields(formFields, availableFields);
+                      // Preserve __sig_* position keys when re-mapping
+                      const posKeys = Object.fromEntries(Object.entries(fieldMappings).filter(([k]) => k.startsWith("__sig_")));
+                      const newMappings = { ...autoMapFields(formFields, availableFields), ...posKeys };
                       setFieldMappings(newMappings);
                       fetchWithTenant(`/api/workspace/templates/${templateId}`, {
                         method: "PATCH",
