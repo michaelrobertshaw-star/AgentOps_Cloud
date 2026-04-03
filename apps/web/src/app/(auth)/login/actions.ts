@@ -28,8 +28,9 @@ export async function loginAction(formData: FormData) {
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
+    const err = (body as { error?: string | { message?: string } }).error;
     const message = encodeURIComponent(
-      (body as { error?: string }).error ?? "Invalid email or password",
+      (typeof err === "string" ? err : err?.message) ?? "Invalid email or password",
     );
     redirect(`/login?error=${message}&from=${encodeURIComponent(from)}`);
   }
