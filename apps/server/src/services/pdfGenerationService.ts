@@ -351,11 +351,17 @@ async function resolveImageBuffer(val: string): Promise<{ buf: Buffer; mime: str
       const timer = setTimeout(() => controller.abort(), IMAGE_FETCH_TIMEOUT_MS);
       const res = await fetch(str, { signal: controller.signal });
       clearTimeout(timer);
+      if (!res.ok) {
+        console.error(`[resolveImageBuffer] HTTP ${res.status} fetching image URL: ${str.slice(0, 80)}...`);
+        return null;
+      }
       const buf = Buffer.from(await res.arrayBuffer());
       if (buf.length > IMAGE_FETCH_MAX_BYTES) return null;
       const mime = res.headers.get("content-type") || "image/jpeg";
+      console.log(`[resolveImageBuffer] Fetched image: ${mime}, ${buf.length} bytes`);
       return { buf, mime };
-    } catch {
+    } catch (err) {
+      console.error(`[resolveImageBuffer] Failed to fetch image URL: ${err}`);
       return null;
     }
   }
@@ -423,10 +429,14 @@ export async function fillPdfForm(
       } else if (constructor === "PDFRadioGroup") {
         form.getRadioGroup(formFieldName).select(strValue);
       } else if (constructor === "PDFSignature") {
-        // Signature fields can't be filled via AcroForm API.
-        // Read raw /Rect [x1,y1,x2,y2] from PDF dict to get true page coordinates.
+        // Signature fields can't be filled via AcroForm API — embed as image instead.
+        console.log(`[fillPdfForm] Processing signature field: ${formFieldName}, value length: ${strValue.length}, starts: ${strValue.slice(0, 40)}`);
         const imageData = await resolveImageBuffer(strValue);
-        if (!imageData) continue;
+        if (!imageData) {
+          console.error(`[fillPdfForm] No image data for signature field: ${formFieldName}`);
+          continue;
+        }
+        console.log(`[fillPdfForm] Image resolved for ${formFieldName}: ${imageData.mime}, ${imageData.buf.length} bytes`);
 
         const widgets = field.acroField.getWidgets();
         if (widgets.length === 0) continue;
