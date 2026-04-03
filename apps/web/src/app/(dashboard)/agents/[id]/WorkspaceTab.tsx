@@ -119,6 +119,158 @@ const FILTER_OPERATORS: Record<string, string> = {
   not_contains: "does not contain",
 };
 
+// ── PDF File List with Preview ───────────────────────────────
+
+function PdfFileList({
+  pdfFiles,
+  runId,
+  totalCount,
+}: {
+  pdfFiles: Record<string, unknown>[];
+  runId?: string;
+  totalCount: number;
+}) {
+  const [previewFile, setPreviewFile] = useState<string | null>(null);
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewPage, setPreviewPage] = useState(0);
+  const PAGE_SIZE = 10;
+
+  const visibleFiles = pdfFiles.slice(0, (previewPage + 1) * PAGE_SIZE);
+  const hasMore = visibleFiles.length < pdfFiles.length;
+
+  // Fetch PDF with auth and create blob URL
+  const openPreview = useCallback(async (filename: string) => {
+    if (!runId) return;
+    if (previewFile === filename) {
+      // Toggle off
+      setPreviewFile(null);
+      if (blobUrl) { URL.revokeObjectURL(blobUrl); setBlobUrl(null); }
+      return;
+    }
+    setPreviewFile(filename);
+    setLoadingPreview(true);
+    setPreviewError(null);
+    if (blobUrl) URL.revokeObjectURL(blobUrl);
+    setBlobUrl(null);
+    try {
+      const res = await fetchWithTenant(
+        `/api/workspace/runs/${runId}/file/${encodeURIComponent(filename)}`
+      );
+      if (!res.ok) {
+        const errText = await res.text().catch(() => "");
+        throw new Error(`HTTP ${res.status}: ${errText.slice(0, 200)}`);
+      }
+      const blob = await res.blob();
+      if (blob.size === 0) throw new Error("Empty PDF response");
+      const url = URL.createObjectURL(blob);
+      setBlobUrl(url);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("PDF preview failed:", msg);
+      setPreviewError(msg);
+      setBlobUrl(null);
+    } finally {
+      setLoadingPreview(false);
+    }
+  }, [runId, previewFile, blobUrl]);
+
+  // Clean up blob URL on unmount
+  useEffect(() => {
+    return () => { if (blobUrl) URL.revokeObjectURL(blobUrl); };
+  }, [blobUrl]);
+
+  return (
+    <div className="border-b border-gray-100">
+      {/* Preview */}
+      {previewFile && (
+        <div className="border-b border-gray-200 bg-gray-50">
+          <div className="flex items-center justify-between px-3 py-1.5 bg-gray-100 border-b border-gray-200">
+            <span className="text-[10px] font-medium text-gray-700 truncate flex-1">{previewFile}</span>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              {blobUrl && (
+                <a
+                  href={blobUrl}
+                  download={previewFile}
+                  className="text-[10px] text-blue-600 hover:text-blue-800 font-medium"
+                >
+                  Download
+                </a>
+              )}
+              <button
+                onClick={() => { setPreviewFile(null); if (blobUrl) { URL.revokeObjectURL(blobUrl); setBlobUrl(null); } }}
+                className="text-[10px] text-gray-400 hover:text-gray-600"
+              >
+                close
+              </button>
+            </div>
+          </div>
+          {loadingPreview ? (
+            <div className="flex items-center justify-center py-12">
+              <div className="animate-spin h-6 w-6 border-2 border-purple-500 border-t-transparent rounded-full" />
+            </div>
+          ) : blobUrl ? (
+            <iframe
+              src={blobUrl}
+              className="w-full border-0"
+              style={{ height: 500 }}
+              title={`Preview: ${previewFile}`}
+            />
+          ) : (
+            <div className="flex flex-col items-center justify-center py-8 gap-1">
+              <span className="text-xs text-red-500 font-medium">Failed to load preview</span>
+              {previewError && <span className="text-[10px] text-red-400 max-w-md text-center break-all">{previewError}</span>}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* File list */}
+      <div className="px-3 py-2">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-[10px] font-bold text-purple-600 uppercase tracking-wide">
+            {totalCount} PDFs Generated
+          </span>
+          {!runId && (
+            <span className="text-[9px] text-gray-400">Run full pipeline to preview</span>
+          )}
+        </div>
+        <div className="max-h-40 overflow-auto space-y-0.5">
+          {visibleFiles.map((r, i) => {
+            const filename = String(r._pdf_file);
+            const isActive = previewFile === filename;
+            return (
+              <div
+                key={i}
+                className={`flex items-center gap-1.5 text-[10px] rounded px-1 py-0.5 cursor-pointer transition-colors ${
+                  isActive
+                    ? "bg-purple-100 text-purple-700 font-medium"
+                    : "text-gray-600 hover:bg-gray-100"
+                }`}
+                onClick={() => openPreview(filename)}
+              >
+                <svg className={`w-3 h-3 flex-shrink-0 ${isActive ? "text-purple-500" : "text-red-400"}`} fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clipRule="evenodd"/>
+                </svg>
+                <span className="truncate">{filename}</span>
+              </div>
+            );
+          })}
+          {hasMore && (
+            <button
+              onClick={() => setPreviewPage((p) => p + 1)}
+              className="text-[10px] text-blue-600 hover:text-blue-800 font-medium pl-4 py-1"
+            >
+              Show more ({pdfFiles.length - visibleFiles.length} remaining)
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Searchable Dropdown ─────────────────────────────────────
 
 function SearchSelect({
@@ -258,9 +410,41 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
   const [renamingTemplateId, setRenamingTemplateId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
 
-  // Preview modal for SAVE step
-  const [previewFiles, setPreviewFiles] = useState<Array<{ filename: string; data: Record<string, unknown> }> | null>(null);
+  // Preview modal for SAVE step — shows actual rendered PDFs or data table fallback
+  const [previewFiles, setPreviewFiles] = useState<Array<{ filename: string; runId: string; data?: Record<string, unknown> }> | null>(null);
   const [previewIndex, setPreviewIndex] = useState(0);
+  const [previewBlobUrls, setPreviewBlobUrls] = useState<Record<number, string>>({});
+
+  // ── Fetch PDF blob for preview modal ──
+  useEffect(() => {
+    if (!previewFiles || previewFiles.length === 0) {
+      // Cleanup blob URLs when modal closes
+      Object.values(previewBlobUrls).forEach((url) => URL.revokeObjectURL(url));
+      setPreviewBlobUrls({});
+      return;
+    }
+    const file = previewFiles[previewIndex];
+    if (!file || !file.runId) return; // data-table mode — no PDF to fetch
+    if (previewBlobUrls[previewIndex]) return; // already fetched
+    let cancelled = false;
+    fetchWithTenant(`/api/workspace/runs/${file.runId}/file/${encodeURIComponent(file.filename)}`)
+      .then(async (res) => {
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          throw new Error(`HTTP ${res.status}: ${body}`);
+        }
+        return res.blob();
+      })
+      .then((blob) => {
+        if (cancelled) return;
+        const url = URL.createObjectURL(blob);
+        setPreviewBlobUrls((prev) => ({ ...prev, [previewIndex]: url }));
+      })
+      .catch((err) => {
+        console.error("Failed to load PDF preview:", err);
+      });
+    return () => { cancelled = true; };
+  }, [previewFiles, previewIndex]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Load resources ──
 
@@ -451,6 +635,27 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
             config: { pick: step.config.fields },
             source_text: "",
           };
+        case "create_doc":
+          return {
+            id: step.id, order: idx + 1, type: "action" as const,
+            label: `Create ${step.config.doc_type ?? "PDF"} documents`,
+            operation: "generate_doc",
+            config: {
+              template_id: step.config.template,
+              output_format: step.config.doc_type ?? "pdf",
+              per_row: step.config.per_record ?? true,
+              filename_pattern: step.config.filename_pattern ?? "",
+            },
+            source_text: "",
+          };
+        case "save":
+          return {
+            id: step.id, order: idx + 1, type: "action" as const,
+            label: `Save as ${step.config.format ?? "pdf"}`,
+            operation: "name_files",
+            config: { pattern: step.config.filename_pattern || `{trip_id}-{name}.${step.config.format ?? "pdf"}` },
+            source_text: "",
+          };
         default:
           return {
             id: step.id, order: idx + 1, type: "action" as const,
@@ -463,7 +668,7 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
 
     setStepTestResults((prev) => ({
       ...prev,
-      [stepId]: { loading: true, data: null, error: null, showRaw: true },
+      [stepId]: { loading: true, data: null, error: null, showRaw: false },
     }));
 
     try {
@@ -476,7 +681,7 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
       const result = await res.json();
       setStepTestResults((prev) => ({
         ...prev,
-        [stepId]: { loading: false, data: result, error: result.error ?? null, showRaw: true },
+        [stepId]: { loading: false, data: result, error: result.error ?? null, showRaw: false },
       }));
     } catch (e) {
       setStepTestResults((prev) => ({
@@ -1567,28 +1772,43 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
                         )}
                       </div>
 
-                      {/* Preview button */}
-                      {currentRun?.output_data && currentRun.output_data.length > 0 && (
-                        <button
-                          onClick={() => {
-                            const pattern = (step.config.filename_pattern as string) || `{trip_id}-{name}.${(step.config.format as string) || "pdf"}`;
-                            const files = currentRun.output_data!.slice(0, 50).map((row: Record<string, unknown>) => {
-                              let fn = pattern;
-                              for (const [key, val] of Object.entries(row)) {
-                                fn = fn.replace(`{${key}}`, String(val ?? "").replace(/[^a-zA-Z0-9_\-. ]/g, "").slice(0, 50));
+                      {/* Preview button — opens PDF viewer (full run) or data preview (test) */}
+                      {currentRun?.output_data && currentRun.output_data.length > 0 && (() => {
+                        const pdfRows = currentRun.output_data!.filter((r: Record<string, unknown>) => r._pdf_file);
+                        const hasPdfs = pdfRows.length > 0 && currentRun.id;
+                        const count = hasPdfs ? pdfRows.length : currentRun.output_data!.length;
+                        return (
+                          <button
+                            onClick={() => {
+                              if (hasPdfs) {
+                                const files = pdfRows.slice(0, 50).map((row: Record<string, unknown>) => ({
+                                  filename: String(row._pdf_file),
+                                  runId: currentRun.id,
+                                }));
+                                setPreviewFiles(files);
+                                setPreviewIndex(0);
+                              } else {
+                                // Fallback: show data table preview with generated filenames
+                                const pattern = (step.config.filename_pattern as string) || `{trip_id}-{name}.${(step.config.format as string) || "pdf"}`;
+                                const files = currentRun.output_data!.slice(0, 50).map((row: Record<string, unknown>) => {
+                                  let fn = pattern;
+                                  for (const [key, val] of Object.entries(row)) {
+                                    fn = fn.replace(`{${key}}`, String(val ?? "").replace(/[^a-zA-Z0-9_\-. ]/g, "").slice(0, 50));
+                                  }
+                                  fn = fn.replace(/\{[^}]+\}/g, "unknown");
+                                  return { filename: fn, runId: "", data: row };
+                                });
+                                setPreviewFiles(files as any);
+                                setPreviewIndex(0);
                               }
-                              fn = fn.replace(/\{[^}]+\}/g, "unknown");
-                              return { filename: fn, data: row };
-                            });
-                            setPreviewFiles(files);
-                            setPreviewIndex(0);
-                          }}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-100 hover:bg-amber-200 text-amber-700 text-xs font-medium rounded-lg border border-amber-300"
-                        >
-                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
-                          Preview {Math.min(currentRun.output_data.length, 50)} files
-                        </button>
-                      )}
+                            }}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-100 hover:bg-amber-200 text-amber-700 text-xs font-medium rounded-lg border border-amber-300"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                            Preview {Math.min(count, 50)} {hasPdfs ? "PDFs" : "files"}
+                          </button>
+                        );
+                      })()}
                     </div>
                   )}
 
@@ -1610,35 +1830,77 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
                         </div>
                       ) : (
                         <div className="rounded-lg bg-white border border-gray-200 overflow-hidden">
-                          <div className="flex items-center justify-between px-3 py-1.5 bg-gray-50 border-b border-gray-200">
-                            <div className="flex items-center gap-2">
-                              <span className="w-4 h-4 rounded-full bg-green-500 flex items-center justify-center text-[9px] font-bold text-white">&#10003;</span>
-                              <span className="text-[10px] font-medium text-gray-600">
+                          {(() => {
+                            const d = stepTestResults[step.id].data as Record<string, unknown> | null;
+                            const stepRes = Array.isArray(d?.step_results) ? d.step_results as Array<{ label?: string; status?: string; message?: string; rowCount?: number; duration_ms?: number }> : [];
+                            const rows = d?.rows_processed ?? (Array.isArray(d?.output_data) ? (d.output_data as unknown[]).length : 0);
+                            const ms = d?.duration_ms ?? "?";
+                            const overallStatus = d?.status as string ?? "unknown";
+                            const isSuccess = overallStatus === "completed";
+                            return (
+                              <>
+                                <div className="flex items-center justify-between px-3 py-1.5 bg-gray-50 border-b border-gray-200">
+                                  <div className="flex items-center gap-2">
+                                    <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold text-white ${isSuccess ? "bg-green-500" : "bg-red-500"}`}>
+                                      {isSuccess ? "\u2713" : "!"}
+                                    </span>
+                                    <span className="text-[10px] font-medium text-gray-600">
+                                      {String(rows)} rows | {String(ms)}ms
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      onClick={() => toggleStepRaw(step.id)}
+                                      className="text-[10px] font-medium text-blue-600 hover:text-blue-800"
+                                    >
+                                      {stepTestResults[step.id].showRaw ? "Hide Raw" : "View Raw"}
+                                    </button>
+                                    <button onClick={() => clearStepTest(step.id)} className="text-[10px] text-gray-400 hover:text-gray-600">dismiss</button>
+                                  </div>
+                                </div>
+                                {/* Step-by-step summary */}
+                                {stepRes.length > 0 && (
+                                  <div className="px-3 py-2 space-y-1 border-b border-gray-100">
+                                    {stepRes.map((sr, i) => (
+                                      <div key={i} className="flex items-center gap-2 text-[10px]">
+                                        <span className={`w-3 h-3 rounded-full flex items-center justify-center text-[7px] font-bold text-white flex-shrink-0 ${
+                                          sr.status === "success" ? "bg-green-500" :
+                                          sr.status === "error" ? "bg-red-500" :
+                                          sr.status === "skipped" ? "bg-yellow-500" :
+                                          "bg-gray-400"
+                                        }`}>
+                                          {sr.status === "success" ? "\u2713" : sr.status === "error" ? "\u2717" : "-"}
+                                        </span>
+                                        <span className="text-gray-700 font-medium truncate">{sr.label}</span>
+                                        {sr.message && <span className="text-gray-400 truncate ml-auto">{sr.message}</span>}
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                                {/* Generated files — clickable PDF previews */}
                                 {(() => {
-                                  const d = stepTestResults[step.id].data as Record<string, unknown> | null;
-                                  const rows = d?.rows_processed ?? (Array.isArray(d?.output_data) ? (d.output_data as unknown[]).length : 0);
-                                  const ms = d?.duration_ms ?? "?";
-                                  return `${rows} rows | ${ms}ms`;
+                                  const outputData = Array.isArray(d?.output_data) ? d.output_data as Record<string, unknown>[] : [];
+                                  const pdfFiles = outputData.filter((r) => r._pdf_file);
+                                  const testRunId = d?.run_id as string | undefined;
+                                  if (pdfFiles.length === 0) return null;
+                                  return (
+                                    <PdfFileList
+                                      pdfFiles={pdfFiles}
+                                      runId={testRunId}
+                                      totalCount={pdfFiles.length}
+                                    />
+                                  );
                                 })()}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <button
-                                onClick={() => toggleStepRaw(step.id)}
-                                className="text-[10px] font-medium text-blue-600 hover:text-blue-800"
-                              >
-                                {stepTestResults[step.id].showRaw ? "Hide Raw" : "View Raw"}
-                              </button>
-                              <button onClick={() => clearStepTest(step.id)} className="text-[10px] text-gray-400 hover:text-gray-600">dismiss</button>
-                            </div>
-                          </div>
-                          {stepTestResults[step.id].showRaw && (
-                            <div className="max-h-64 overflow-auto">
-                              <pre className="text-[10px] leading-relaxed text-gray-700 p-3 font-mono whitespace-pre-wrap break-all">
-                                {JSON.stringify(stepTestResults[step.id].data, null, 2)}
-                              </pre>
-                            </div>
-                          )}
+                                {stepTestResults[step.id].showRaw && (
+                                  <div className="max-h-64 overflow-auto">
+                                    <pre className="text-[10px] leading-relaxed text-gray-700 p-3 font-mono whitespace-pre-wrap break-all">
+                                      {JSON.stringify(d, null, 2)}
+                                    </pre>
+                                  </div>
+                                )}
+                              </>
+                            );
+                          })()}
                         </div>
                       )}
                     </div>
@@ -1885,65 +2147,102 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
       })()}
 
       {/* ── File Preview Modal ── */}
+      {/* ── PDF Preview Modal ── */}
       {previewFiles && previewFiles.length > 0 && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setPreviewFiles(null)}>
-          <div className="bg-white rounded-xl shadow-2xl w-[700px] max-h-[80vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          onClick={() => setPreviewFiles(null)}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowLeft") setPreviewIndex((i) => Math.max(0, i - 1));
+            else if (e.key === "ArrowRight") setPreviewIndex((i) => Math.min(previewFiles.length - 1, i + 1));
+            else if (e.key === "Escape") setPreviewFiles(null);
+          }}
+          tabIndex={0}
+          role="dialog"
+        >
+          <div className="bg-white rounded-xl shadow-2xl w-[90vw] max-w-[900px] h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
             {/* Header */}
-            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
+            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 shrink-0">
               <div className="flex items-center gap-3">
-                <h3 className="text-sm font-bold text-gray-800">File Preview</h3>
+                <h3 className="text-sm font-bold text-gray-800">PDF Preview</h3>
                 <span className="text-xs text-gray-400">{previewIndex + 1} of {previewFiles.length}</span>
               </div>
-              <button onClick={() => setPreviewFiles(null)} className="text-gray-400 hover:text-gray-600">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-              </button>
-            </div>
-
-            {/* Filename */}
-            <div className="px-5 py-3 bg-amber-50 border-b border-amber-200">
-              <p className="text-sm font-mono text-amber-800 font-medium">{previewFiles[previewIndex].filename}</p>
-            </div>
-
-            {/* Data preview */}
-            <div className="flex-1 overflow-y-auto px-5 py-3">
-              <table className="w-full text-xs">
-                <tbody>
-                  {Object.entries(previewFiles[previewIndex].data).filter(([, v]) => v !== null && v !== undefined && String(v).trim() !== "").slice(0, 40).map(([key, val]) => (
-                    <tr key={key} className="border-b border-gray-100">
-                      <td className="py-1.5 pr-3 text-gray-500 font-medium whitespace-nowrap align-top">{key}</td>
-                      <td className="py-1.5 text-gray-800 break-all">{typeof val === "string" && val.startsWith("http") ? <a href={val} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">{val}</a> : String(val).slice(0, 200)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Navigation */}
-            <div className="flex items-center justify-between px-5 py-3 border-t border-gray-200 bg-gray-50">
-              <button
-                onClick={() => setPreviewIndex(Math.max(0, previewIndex - 1))}
-                disabled={previewIndex === 0}
-                className="px-3 py-1.5 bg-white border border-gray-300 rounded-lg text-xs font-medium text-gray-600 hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed"
-              >
-                ← Previous
-              </button>
-              <div className="flex items-center gap-1">
-                {previewFiles.slice(0, 10).map((_, i) => (
-                  <button
-                    key={i}
-                    onClick={() => setPreviewIndex(i)}
-                    className={`w-2 h-2 rounded-full transition-colors ${i === previewIndex ? "bg-amber-500" : "bg-gray-300 hover:bg-gray-400"}`}
-                  />
-                ))}
-                {previewFiles.length > 10 && <span className="text-[9px] text-gray-400 ml-1">+{previewFiles.length - 10}</span>}
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-mono text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 max-w-[300px] truncate">
+                  {previewFiles[previewIndex].filename}
+                </span>
+                <button onClick={() => setPreviewFiles(null)} className="text-gray-400 hover:text-gray-600 ml-2">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
               </div>
-              <button
-                onClick={() => setPreviewIndex(Math.min(previewFiles.length - 1, previewIndex + 1))}
-                disabled={previewIndex >= previewFiles.length - 1}
-                className="px-3 py-1.5 bg-white border border-gray-300 rounded-lg text-xs font-medium text-gray-600 hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed"
-              >
-                Next →
-              </button>
+            </div>
+
+            {/* PDF iframe or data table */}
+            <div className="flex-1 relative bg-gray-100">
+              {previewFiles[previewIndex].runId ? (
+                // PDF mode: render in iframe
+                previewBlobUrls[previewIndex] ? (
+                  <iframe
+                    key={previewBlobUrls[previewIndex]}
+                    src={previewBlobUrls[previewIndex]}
+                    className="absolute inset-0 w-full h-full border-0"
+                    title={previewFiles[previewIndex].filename}
+                  />
+                ) : (
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <div className="flex flex-col items-center gap-3">
+                      <div className="animate-spin h-8 w-8 border-3 border-amber-500 border-t-transparent rounded-full" />
+                      <span className="text-sm text-gray-500">Loading PDF...</span>
+                    </div>
+                  </div>
+                )
+              ) : (
+                // Data table fallback
+                <div className="absolute inset-0 overflow-y-auto p-5">
+                  <table className="w-full text-xs">
+                    <tbody>
+                      {previewFiles[previewIndex].data && Object.entries(previewFiles[previewIndex].data!).filter(([, v]) => v !== null && v !== undefined && String(v).trim() !== "").slice(0, 40).map(([key, val]) => (
+                        <tr key={key} className="border-b border-gray-200">
+                          <td className="py-2 pr-3 text-gray-500 font-medium whitespace-nowrap align-top">{key}</td>
+                          <td className="py-2 text-gray-800 break-all">{typeof val === "string" && val.startsWith("http") ? <a href={val} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">{val}</a> : String(val).slice(0, 200)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* Left arrow overlay */}
+              {previewIndex > 0 && (
+                <button
+                  onClick={() => setPreviewIndex((i) => Math.max(0, i - 1))}
+                  className="absolute left-3 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/50 hover:bg-black/70 text-white flex items-center justify-center shadow-lg transition-colors"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" /></svg>
+                </button>
+              )}
+
+              {/* Right arrow overlay */}
+              {previewIndex < previewFiles.length - 1 && (
+                <button
+                  onClick={() => setPreviewIndex((i) => Math.min(previewFiles.length - 1, i + 1))}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/50 hover:bg-black/70 text-white flex items-center justify-center shadow-lg transition-colors"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" /></svg>
+                </button>
+              )}
+            </div>
+
+            {/* Bottom nav dots */}
+            <div className="flex items-center justify-center gap-1.5 px-5 py-2.5 border-t border-gray-200 bg-gray-50 shrink-0">
+              {previewFiles.slice(0, 20).map((_, i) => (
+                <button
+                  key={i}
+                  onClick={() => setPreviewIndex(i)}
+                  className={`w-2.5 h-2.5 rounded-full transition-colors ${i === previewIndex ? "bg-amber-500 scale-125" : "bg-gray-300 hover:bg-gray-400"}`}
+                />
+              ))}
+              {previewFiles.length > 20 && <span className="text-[9px] text-gray-400 ml-1">+{previewFiles.length - 20}</span>}
             </div>
           </div>
         </div>

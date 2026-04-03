@@ -8,7 +8,7 @@
 import { generate } from "@pdfme/generator";
 import { text, image, barcodes } from "@pdfme/schemas";
 import type { Template } from "@pdfme/common";
-import { PDFDocument } from "pdf-lib";
+import { PDFDocument, PDFName, PDFArray } from "pdf-lib";
 import { downloadWorkspaceFile, uploadWorkspaceFile } from "./storageService.js";
 import pino from "pino";
 import path from "path";
@@ -118,6 +118,11 @@ export async function generatePdf(
   const input: Record<string, string> = {};
 
   for (const [templateField, columnKey] of Object.entries(fieldMappings)) {
+    // Support static values: "__static:someValue" bypasses data lookup
+    if (columnKey.startsWith("__static:")) {
+      input[templateField] = columnKey.replace("__static:", "");
+      continue;
+    }
     const rawValue = data[columnKey];
     if (rawValue === null || rawValue === undefined) {
       input[templateField] = "";
@@ -234,6 +239,11 @@ export async function generateBatchPdfs(
 export interface PdfFormField {
   name: string;
   type: "text" | "checkbox" | "dropdown" | "radio" | "signature" | "unknown";
+  /** For signature fields: raw PDF rect position + page dimensions */
+  rect?: { x: number; y: number; width: number; height: number };
+  pageIndex?: number;
+  pageWidth?: number;
+  pageHeight?: number;
 }
 
 /**
@@ -245,6 +255,7 @@ export async function extractFormFields(pdfBuffer: Buffer): Promise<PdfFormField
     const doc = await PDFDocument.load(pdfBuffer, { ignoreEncryption: true });
     const form = doc.getForm();
     const fields = form.getFields();
+    const pages = doc.getPages();
     return fields.map((f) => {
       const name = f.getName();
       const constructor = f.constructor.name;
@@ -254,6 +265,45 @@ export async function extractFormFields(pdfBuffer: Buffer): Promise<PdfFormField
       else if (constructor === "PDFDropdown") type = "dropdown";
       else if (constructor === "PDFRadioGroup") type = "radio";
       else if (constructor === "PDFSignature") type = "signature";
+
+      if (type === "signature") {
+        try {
+          const widgets = f.acroField.getWidgets();
+          if (widgets.length > 0) {
+            const widget = widgets[0];
+            const rectObj = widget.dict.get(PDFName.of("Rect"));
+            let x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+            if (rectObj instanceof PDFArray) {
+              for (let ri = 0; ri < rectObj.size(); ri++) {
+                const v = rectObj.get(ri);
+                const n = typeof (v as any)?.asNumber === "function" ? (v as any).asNumber() : 0;
+                if (ri === 0) x1 = n; else if (ri === 1) y1 = n; else if (ri === 2) x2 = n; else y2 = n;
+              }
+            }
+            const left = Math.min(x1, x2);
+            const bottom = Math.min(y1, y2);
+            const width = Math.abs(x2 - x1);
+            const height = Math.abs(y2 - y1);
+
+            let pageIndex = 0;
+            let pageWidth = pages[0]?.getWidth() ?? 0;
+            let pageHeight = pages[0]?.getHeight() ?? 0;
+            const pageRef = widget.P();
+            if (pageRef) {
+              const idx = pages.findIndex((p: any) => p.ref === pageRef);
+              if (idx >= 0) {
+                pageIndex = idx;
+                pageWidth = pages[idx].getWidth();
+                pageHeight = pages[idx].getHeight();
+              }
+            }
+            return { name, type, rect: { x: left, y: bottom, width, height }, pageIndex, pageWidth, pageHeight };
+          }
+        } catch {
+          // Fall through to basic return
+        }
+      }
+
       return { name, type };
     });
   } catch (err) {
@@ -281,8 +331,49 @@ export async function loadPdfBuffer(basePdfKey: string): Promise<Buffer> {
 }
 
 /**
+ * Resolve a value to a raw image buffer + mime for pdf-lib embedding.
+ * Supports: data URI, http(s) URL, raw base64.
+ */
+async function resolveImageBuffer(val: string): Promise<{ buf: Buffer; mime: string } | null> {
+  const str = val.trim();
+  if (!str) return null;
+
+  if (str.startsWith("data:")) {
+    const match = str.match(/^data:(image\/\w+);base64,(.+)$/);
+    if (!match) return null;
+    return { buf: Buffer.from(match[2], "base64"), mime: match[1] };
+  }
+
+  if (/^https?:\/\//i.test(str)) {
+    if (isPrivateUrl(str)) return null;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), IMAGE_FETCH_TIMEOUT_MS);
+      const res = await fetch(str, { signal: controller.signal });
+      clearTimeout(timer);
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length > IMAGE_FETCH_MAX_BYTES) return null;
+      const mime = res.headers.get("content-type") || "image/jpeg";
+      return { buf, mime };
+    } catch {
+      return null;
+    }
+  }
+
+  // Assume raw base64
+  try {
+    return { buf: Buffer.from(str, "base64"), mime: "image/jpeg" };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Fill a single PDF form using pdf-lib. Preserves the original PDF exactly —
  * dimensions, fonts, checkboxes, everything. Only touches mapped fields.
+ *
+ * Signature fields: pdf-lib can't fill PDFSignature fields directly, so we
+ * detect the field's rectangle, embed the image, and draw it on the page.
  */
 export async function fillPdfForm(
   pdfBuffer: Buffer,
@@ -292,10 +383,30 @@ export async function fillPdfForm(
   const doc = await PDFDocument.load(pdfBuffer, { ignoreEncryption: true });
   const form = doc.getForm();
 
+  // Debug: log all PDF field names and the mappings we received
+  const allFieldNames = form.getFields().map((f) => `${f.getName()} (${f.constructor.name})`);
+  const mappingCount = Object.keys(fieldMappings).filter((k) => !k.startsWith("__sig_")).length;
+  console.log(`[fillPdfForm] PDF has ${allFieldNames.length} fields: ${allFieldNames.join(", ")}`);
+  console.log(`[fillPdfForm] Received ${mappingCount} field mappings: ${JSON.stringify(Object.fromEntries(Object.entries(fieldMappings).filter(([k]) => !k.startsWith("__sig_"))))}`);
+
+  // Clear ALL text fields first so stale/placeholder values (e.g. "asdf") don't persist
+  for (const field of form.getFields()) {
+    const ctor = field.constructor.name;
+    if (ctor === "PDFTextField") {
+      try { form.getTextField(field.getName()).setText(""); } catch {}
+    }
+  }
+
   for (const [formFieldName, columnKey] of Object.entries(fieldMappings)) {
-    const rawValue = data[columnKey];
-    if (rawValue === null || rawValue === undefined) continue;
-    const strValue = String(rawValue);
+    // Support static values: "__static:someValue" bypasses data lookup
+    let strValue: string;
+    if (columnKey.startsWith("__static:")) {
+      strValue = columnKey.replace("__static:", "");
+    } else {
+      const rawValue = data[columnKey];
+      if (rawValue === null || rawValue === undefined) continue;
+      strValue = String(rawValue);
+    }
 
     try {
       const field = form.getField(formFieldName);
@@ -311,8 +422,75 @@ export async function fillPdfForm(
         form.getDropdown(formFieldName).select(strValue);
       } else if (constructor === "PDFRadioGroup") {
         form.getRadioGroup(formFieldName).select(strValue);
+      } else if (constructor === "PDFSignature") {
+        // Signature fields can't be filled via AcroForm API.
+        // Read raw /Rect [x1,y1,x2,y2] from PDF dict to get true page coordinates.
+        const imageData = await resolveImageBuffer(strValue);
+        if (!imageData) continue;
+
+        const widgets = field.acroField.getWidgets();
+        if (widgets.length === 0) continue;
+        const widget = widgets[0];
+
+        // Read raw rect from PDF dictionary (bypasses rotation issues)
+        const { PDFName, PDFArray } = await import("pdf-lib");
+        const rectObj = widget.dict.get(PDFName.of("Rect"));
+        let x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+        if (rectObj instanceof PDFArray) {
+          const nums = [];
+          for (let ri = 0; ri < rectObj.size(); ri++) {
+            const v = rectObj.get(ri);
+            nums.push(typeof (v as any)?.asNumber === "function" ? (v as any).asNumber() : 0);
+          }
+          [x1, y1, x2, y2] = nums;
+        }
+        // Use the PDF form field's own position and size directly
+        const left = Math.min(x1, x2);
+        const bottom = Math.min(y1, y2);
+        const posX = left;
+        const posY = bottom;
+        // Derive target size from the PDF rect (abs diff); fall back to sensible defaults
+        const targetW = Math.abs(x2 - x1) || 200;
+        const targetH = Math.abs(y2 - y1) || 50;
+
+        const pageRef = widget.P();
+        const pages = doc.getPages();
+        let targetPage = pages[0];
+        if (pageRef) {
+          const idx = pages.findIndex((p) => p.ref === pageRef);
+          if (idx >= 0) targetPage = pages[idx];
+        }
+
+        // Prefer PNG for transparency support
+        let embeddedImage;
+        if (imageData.mime.includes("png")) {
+          embeddedImage = await doc.embedPng(imageData.buf);
+        } else {
+          embeddedImage = await doc.embedJpg(imageData.buf);
+        }
+
+        // Fit image within the target area, preserving aspect ratio
+        const imgAspect = embeddedImage.width / embeddedImage.height;
+        const targetAspect = targetW / targetH;
+        let drawW: number, drawH: number;
+        if (imgAspect > targetAspect) {
+          drawW = targetW;
+          drawH = targetW / imgAspect;
+        } else {
+          drawH = targetH;
+          drawW = targetH * imgAspect;
+        }
+
+        // Center the image on the (possibly overridden) position
+        const drawX = posX + (targetW - drawW) / 2;
+        const drawY = posY + (targetH - drawH) / 2;
+
+        targetPage.drawImage(embeddedImage, { x: drawX, y: drawY, width: drawW, height: drawH });
+
+        // Remove the signature field so it doesn't overlay our image
+        form.removeField(field);
+        logger.info({ field: formFieldName, targetW, targetH }, "Embedded signature image on PDF");
       }
-      // PDFSignature — skip (can't fill programmatically)
     } catch (err) {
       logger.warn({ field: formFieldName, err }, "Failed to fill form field");
     }

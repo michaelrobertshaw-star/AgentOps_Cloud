@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { flushSync } from "react-dom";
 import { fetchWithTenant } from "@/lib/fetchWithTenant";
+// SignatureOverlay removed — signature fields now use simple column mapping (no drag overlay)
 
 interface TemplateDesignerProps {
   templateId: string;
@@ -15,6 +16,10 @@ interface TemplateDesignerProps {
 interface PdfFormField {
   name: string;
   type: "text" | "checkbox" | "dropdown" | "radio" | "signature" | "unknown";
+  rect?: { x: number; y: number; width: number; height: number };
+  pageIndex?: number;
+  pageWidth?: number;
+  pageHeight?: number;
 }
 
 // ── Shared helpers ──────────────────────────────────────────────
@@ -84,7 +89,34 @@ function autoMapFields(
   dataColumns: Array<{ key: string; label: string }>,
 ): Record<string, string> {
   const mappings: Record<string, string> = {};
-  const normalize = (s: string) => s.toLowerCase().replace(/[_.\s-]+/g, "").replace(/[']/g, "");
+  // Strip possessives (Member's → Member), punctuation, whitespace, underscores
+  const normalize = (s: string) =>
+    s.toLowerCase()
+      .replace(/'s\b/g, "") // strip possessives
+      .replace(/[_.\s\-\/()#]+/g, "")
+      .replace(/[']/g, "");
+
+  // Common PDF field name → data column aliases
+  const aliases: Record<string, string[]> = {
+    membername: ["name", "passengername", "passenger_name", "membername"],
+    membersname: ["name", "passengername", "passenger_name"],
+    drivername: ["drivername", "driver_name", "driver.name"],
+    driversname: ["drivername", "driver_name", "driver.name"],
+    tripdate: ["pickupdate", "pickup_date", "pickuptime", "pickup_time", "createddate", "created_date"],
+    pickupaddress: ["pickupaddress", "pickup_address", "address.formatted", "addressformatted"],
+    pickupstreetaddresscitystatezip: ["pickupaddress", "pickup_address", "address.formatted", "addressformatted"],
+    dropoffaddress: ["dropoffaddress", "dropoff_address", "destination.formatted", "destinationformatted"],
+    dropoffdestinationstreetaddresscitystatezip: ["dropoffaddress", "dropoff_address", "destination.formatted", "destinationformatted"],
+    vehiclelicenseplateorvin: ["vehicleplate", "vin"],
+    memberhealthfirstcoloradoid: ["accountreference", "account_reference"],
+    escortname: [],
+    fareamount: ["fareamount", "fare_amount"],
+    distance: ["distance", "distancemiles", "distance_miles"],
+    bookingid: ["bookingid", "booking_id", "tripid", "trip_id"],
+    accountname: ["accountname", "account_name", "account.name"],
+    status: ["status"],
+    signature: ["signatureurl", "signature_url", "payment.signature", "paymentsignature"],
+  };
 
   // Build normalized lookup for data columns
   const colIndex = dataColumns.map((c) => ({
@@ -97,22 +129,33 @@ function autoMapFields(
   const usedColumns = new Set<string>();
 
   for (const ff of formFields) {
-    if (ff.type === "signature") continue; // skip signature fields
     const normName = normalize(ff.name);
 
     // 1. Exact normalized match on key or label
     let match = colIndex.find((c) => !usedColumns.has(c.key) && (c.norm === normName || c.labelNorm === normName));
 
-    // 2. Substring containment: form field contains column name or vice versa
+    // 2. Alias lookup: check if this PDF field name matches a known alias
+    if (!match) {
+      const aliasCandidates = aliases[normName];
+      if (aliasCandidates) {
+        for (const alias of aliasCandidates) {
+          const normAlias = normalize(alias);
+          match = colIndex.find((c) => !usedColumns.has(c.key) && (c.norm === normAlias || c.key === alias));
+          if (match) break;
+        }
+      }
+    }
+
+    // 3. Substring containment: form field contains column name or vice versa
     if (!match) {
       match = colIndex.find((c) =>
         !usedColumns.has(c.key) && (normName.includes(c.norm) || c.norm.includes(normName)) && c.norm.length > 2,
       );
     }
 
-    // 3. Keyword overlap: split both and find >50% overlap
+    // 4. Keyword overlap: split both and find >50% overlap
     if (!match) {
-      const ffParts = ff.name.toLowerCase().split(/[_.\s-]+/).filter((p) => p.length > 2);
+      const ffParts = ff.name.toLowerCase().replace(/'s\b/g, "").split(/[_.\s-]+/).filter((p) => p.length > 2);
       let bestScore = 0;
       for (const col of colIndex) {
         if (usedColumns.has(col.key)) continue;
@@ -165,6 +208,7 @@ export default function TemplateDesigner({
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
   const [fieldSearch, setFieldSearch] = useState("");
 
+
   // resolvedSampleRow: URL image values fetched → base64 data URIs
   const [resolvedSampleRow, setResolvedSampleRow] = useState<Record<string, unknown>>(sampleRow);
 
@@ -211,17 +255,29 @@ export default function TemplateDesigner({
         const schema = tmpl.pdfme_schema;
         const isFormFill = schema?.mode === "form_fill";
 
-        // AI auto-map: if form-fill mode with no existing mappings, fuzzy-match field names
-        let initialMappings = tmpl.field_mappings ?? {};
-        if (isFormFill && schema.form_fields && Object.keys(initialMappings).length === 0) {
-          initialMappings = autoMapFields(schema.form_fields, availableFields);
-          // Persist the auto-mapped fields so they survive refresh
-          if (Object.keys(initialMappings).length > 0) {
-            fetchWithTenant(`/api/workspace/templates/${templateId}`, {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ field_mappings: initialMappings }),
-            }).catch(() => {}); // fire-and-forget
+        // AI auto-map: if form-fill mode with few/no existing mappings, fuzzy-match field names.
+        // Strip legacy __sig_* metadata keys (old drag-overlay system, no longer used).
+        let rawMappings = tmpl.field_mappings ?? {};
+        const cleanMappings: Record<string, string> = {};
+        for (const [k, v] of Object.entries(rawMappings)) {
+          if (!k.startsWith("__sig_")) cleanMappings[k] = v as string;
+        }
+        let initialMappings = cleanMappings;
+
+        if (isFormFill && schema.form_fields) {
+          const allFields = schema.form_fields as PdfFormField[];
+          const coverage = allFields.length > 0 ? Object.keys(initialMappings).length / allFields.length : 1;
+
+          if (coverage < 0.3) {
+            initialMappings = autoMapFields(allFields, availableFields);
+            // Persist
+            if (Object.keys(initialMappings).length > 0) {
+              fetchWithTenant(`/api/workspace/templates/${templateId}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ field_mappings: initialMappings }),
+              }).catch(() => {});
+            }
           }
         }
 
@@ -238,9 +294,9 @@ export default function TemplateDesigner({
           setLoading(false);
         });
 
-        // Form fill mode: show PDF in iframe
+        // Form fill mode: show annotated PDF in iframe (field names visible)
         if (isFormFill && tmpl.base_pdf_key) {
-          const pdfRes = await fetchWithTenant(`/api/workspace/templates/${templateId}/base-pdf`);
+          const pdfRes = await fetchWithTenant(`/api/workspace/templates/${templateId}/annotated-pdf`);
           if (pdfRes.ok) {
             const blob = await pdfRes.blob();
             setPdfPreviewUrl(URL.createObjectURL(blob));
@@ -274,6 +330,9 @@ export default function TemplateDesigner({
   useEffect(() => {
     return () => { if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl); };
   }, [pdfPreviewUrl]);
+
+  // pdf.js rendering into canvases — renders PDF as images we can overlay on
+  // (pdf.js canvas rendering removed — form_fill mode uses iframe which preserves radio button interactivity)
 
   function extractFieldNames(schema: unknown): string[] {
     if (!Array.isArray(schema)) return [];
@@ -409,8 +468,8 @@ export default function TemplateDesigner({
           setBasePdfUploaded(true);
           setLoading(false);
         });
-        // Load PDF for preview
-        const pdfRes = await fetchWithTenant(`/api/workspace/templates/${templateId}/base-pdf`);
+        // Load annotated PDF for preview (shows field names)
+        const pdfRes = await fetchWithTenant(`/api/workspace/templates/${templateId}/annotated-pdf`);
         if (pdfRes.ok) {
           const blob = await pdfRes.blob();
           if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl);
@@ -457,6 +516,40 @@ export default function TemplateDesigner({
       setSaving(false);
     }
   }, [templateId, fieldMappings, mode, onSave]);
+
+  // ── Refresh annotated PDF when mappings change (form-fill mode) ──
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevMappingsRef = useRef<Record<string, string>>(fieldMappings);
+  useEffect(() => {
+    if (mode !== "form_fill" || !basePdfUploaded) return;
+
+    const prev = prevMappingsRef.current;
+    const onlySigChanged = false; // legacy drag-overlay optimization removed
+    prevMappingsRef.current = fieldMappings;
+
+    // Debounce: save mappings to server, then optionally re-fetch annotated PDF
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    refreshTimerRef.current = setTimeout(async () => {
+      try {
+        // Always persist mappings (including sig position/size)
+        await fetchWithTenant(`/api/workspace/templates/${templateId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ field_mappings: fieldMappings }),
+        });
+        // Only re-fetch annotated PDF if non-signature mappings changed
+        if (!onlySigChanged) {
+          const pdfRes = await fetchWithTenant(`/api/workspace/templates/${templateId}/annotated-pdf`);
+          if (pdfRes.ok) {
+            const blob = await pdfRes.blob();
+            if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl);
+            setPdfPreviewUrl(URL.createObjectURL(blob));
+          }
+        }
+      } catch { /* ignore refresh errors */ }
+    }, 600);
+    return () => { if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current); };
+  }, [fieldMappings, mode, basePdfUploaded, templateId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Overlay mode: column drop handler ──
   function handleColumnDrop(e: React.DragEvent<HTMLDivElement>) {
@@ -610,16 +703,17 @@ export default function TemplateDesigner({
                 <div className="animate-spin h-8 w-8 border-3 border-green-500 border-t-transparent rounded-full" />
               </div>
             ) : mode === "form_fill" ? (
-              /* Form fill mode: show actual PDF in iframe (preserves dimensions, fonts, everything) */
-              <div className="flex-1 w-full" style={{ minHeight: 0 }}>
+              /* Form fill mode: interactive iframe (preserves radio buttons, checkboxes) */
+              <div className="flex-1 w-full overflow-auto bg-gray-100" style={{ minHeight: 0 }}>
                 {pdfPreviewUrl ? (
                   <iframe
                     src={pdfPreviewUrl}
-                    className="w-full h-full border-0"
+                    className="w-full border-0"
+                    style={{ height: "calc(90vh - 120px)" }}
                     title="PDF Preview"
                   />
                 ) : (
-                  <div className="flex-1 flex items-center justify-center text-gray-400">
+                  <div className="flex-1 flex items-center justify-center text-gray-400 py-20">
                     Loading PDF preview...
                   </div>
                 )}
@@ -648,10 +742,26 @@ export default function TemplateDesigner({
           {/* Right panel */}
           {basePdfUploaded && !loading && mode === "form_fill" && (
             /* ── Form Fill Mode: field mapping panel ── */
-            <div className="w-80 border-l border-gray-200 bg-gray-50 flex flex-col overflow-hidden">
+            <div className="w-80 border-l border-gray-200 bg-gray-50 flex flex-col overflow-hidden relative z-10">
               {/* Header with stats */}
               <div className="p-4 border-b border-gray-200">
-                <h3 className="text-sm font-bold text-gray-800">PDF Form Fields</h3>
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-bold text-gray-800">PDF Form Fields</h3>
+                  <button
+                    onClick={() => {
+                      const newMappings = autoMapFields(formFields, availableFields);
+                      setFieldMappings(newMappings);
+                      fetchWithTenant(`/api/workspace/templates/${templateId}`, {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ field_mappings: newMappings }),
+                      }).catch(() => {});
+                    }}
+                    className="text-[9px] font-bold text-blue-600 hover:text-blue-800 px-1.5 py-0.5 rounded hover:bg-blue-50"
+                  >
+                    Auto-map
+                  </button>
+                </div>
                 <p className="text-[11px] text-gray-500 mt-1">
                   {formFields.length} fields detected — map each to a data column
                 </p>
@@ -681,8 +791,10 @@ export default function TemplateDesigner({
               <div className="flex-1 overflow-y-auto p-3 space-y-2">
                 {filteredFormFields.map((ff) => {
                   const mapped = fieldMappings[ff.name];
-                  const mappedLabel = mapped ? availableFields.find((f) => f.key === mapped)?.label ?? mapped : null;
-                  const preview = mapped ? sampleRow[mapped] : null;
+                  const isStaticValue = mapped?.startsWith("__static:");
+                  const staticVal = isStaticValue ? mapped.replace("__static:", "") : "";
+                  const isMappedToColumn = mapped && !isStaticValue;
+                  const preview = isMappedToColumn ? sampleRow[mapped] : null;
 
                   return (
                     <div
@@ -703,41 +815,192 @@ export default function TemplateDesigner({
                         <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${
                           ff.type === "text" ? "bg-blue-100 text-blue-600" :
                           ff.type === "checkbox" ? "bg-amber-100 text-amber-600" :
+                          ff.type === "radio" ? "bg-orange-100 text-orange-600" :
                           ff.type === "dropdown" ? "bg-purple-100 text-purple-600" :
-                          ff.type === "signature" ? "bg-pink-100 text-pink-600" :
+                          ff.type === "signature" ? "bg-pink-100 text-pink-600" : /* maps to image URL/base64 */
                           "bg-gray-100 text-gray-500"
                         }`}>
-                          {ff.type}
+                          {ff.type === "signature" ? "image" : ff.type}
                         </span>
                       </div>
 
-                      <select
-                        value={mapped ?? ""}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setFieldMappings((prev) => {
-                            if (!val) {
-                              const n = { ...prev };
-                              delete n[ff.name];
-                              return n;
-                            }
-                            return { ...prev, [ff.name]: val };
-                          });
-                        }}
-                        className="w-full px-2 py-1 text-xs border border-gray-300 rounded-md bg-white focus:outline-none focus:ring-1 focus:ring-green-400"
-                      >
-                        <option value="">— Select data column —</option>
-                        {availableFields.map((af) => (
-                          <option key={af.key} value={af.key}>
-                            {af.label}
-                          </option>
-                        ))}
-                      </select>
+                      {/* Type-specific controls */}
+                      {ff.type === "signature" ? (
+                        /* Signature: just map to the column that contains the image URL or base64.
+                           Position is taken automatically from the PDF form field's own location. */
+                        <div className="space-y-1.5">
+                          <p className="text-[9px] text-pink-500">Select the column containing the signature image (URL or base64). It will be placed at the PDF's signature field location.</p>
+                          <select
+                            value={isMappedToColumn ? mapped : ""}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setFieldMappings((prev) => {
+                                const next = { ...prev };
+                                // Clear any legacy __sig_* metadata keys for this field
+                                for (const k of [`__sig_x__${ff.name}`, `__sig_y__${ff.name}`, `__sig_w__${ff.name}`, `__sig_h__${ff.name}`]) {
+                                  delete next[k];
+                                }
+                                if (!val) { delete next[ff.name]; return next; }
+                                return { ...next, [ff.name]: val };
+                              });
+                            }}
+                            className="w-full px-2 py-1 text-xs border border-gray-300 rounded-md bg-white focus:outline-none focus:ring-1 focus:ring-pink-400"
+                          >
+                            <option value="">— Select image column —</option>
+                            {availableFields.map((af) => (
+                              <option key={af.key} value={af.key}>{af.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                      ) : ff.type === "checkbox" ? (
+                        <div className="space-y-1.5">
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => {
+                                setFieldMappings((prev) => {
+                                  const current = prev[ff.name];
+                                  if (current === "__static:true") {
+                                    const n = { ...prev };
+                                    delete n[ff.name];
+                                    return n;
+                                  }
+                                  return { ...prev, [ff.name]: "__static:true" };
+                                });
+                              }}
+                              className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
+                                mapped === "__static:true"
+                                  ? "bg-amber-500 border-amber-500 text-white"
+                                  : "border-gray-300 hover:border-amber-400"
+                              }`}
+                            >
+                              {mapped === "__static:true" && (
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7"/>
+                                </svg>
+                              )}
+                            </button>
+                            <span className="text-[10px] text-gray-500">
+                              {mapped === "__static:true" ? "Always checked" : "Click to check"}
+                            </span>
+                          </div>
+                          <div className="text-[9px] text-gray-400 uppercase tracking-wide">or map to column:</div>
+                          <select
+                            value={isMappedToColumn ? mapped : ""}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setFieldMappings((prev) => {
+                                if (!val) {
+                                  const n = { ...prev };
+                                  delete n[ff.name];
+                                  return n;
+                                }
+                                return { ...prev, [ff.name]: val };
+                              });
+                            }}
+                            className="w-full px-2 py-1 text-xs border border-gray-300 rounded-md bg-white focus:outline-none focus:ring-1 focus:ring-green-400"
+                          >
+                            <option value="">— Select data column —</option>
+                            {availableFields.map((af) => (
+                              <option key={af.key} value={af.key}>{af.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                      ) : ff.type === "radio" ? (
+                        /* Radio: static value input + column mapping */
+                        <div className="space-y-1.5">
+                          <input
+                            type="text"
+                            value={staticVal}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setFieldMappings((prev) => {
+                                if (!val) {
+                                  const n = { ...prev };
+                                  delete n[ff.name];
+                                  return n;
+                                }
+                                return { ...prev, [ff.name]: `__static:${val}` };
+                              });
+                            }}
+                            placeholder="Type value to select..."
+                            className="w-full px-2 py-1 text-xs border border-gray-300 rounded-md bg-white focus:outline-none focus:ring-1 focus:ring-orange-400"
+                          />
+                          <div className="text-[9px] text-gray-400 uppercase tracking-wide">or map to column:</div>
+                          <select
+                            value={isMappedToColumn ? mapped : ""}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setFieldMappings((prev) => {
+                                if (!val) {
+                                  const n = { ...prev };
+                                  delete n[ff.name];
+                                  return n;
+                                }
+                                return { ...prev, [ff.name]: val };
+                              });
+                            }}
+                            className="w-full px-2 py-1 text-xs border border-gray-300 rounded-md bg-white focus:outline-none focus:ring-1 focus:ring-green-400"
+                          >
+                            <option value="">— Select data column —</option>
+                            {availableFields.map((af) => (
+                              <option key={af.key} value={af.key}>{af.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                      ) : (
+                        /* Text/dropdown/other: column dropdown + optional static value */
+                        <div className="space-y-1.5">
+                          <select
+                            value={isMappedToColumn ? mapped : ""}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setFieldMappings((prev) => {
+                                if (!val) {
+                                  const n = { ...prev };
+                                  delete n[ff.name];
+                                  return n;
+                                }
+                                return { ...prev, [ff.name]: val };
+                              });
+                            }}
+                            className="w-full px-2 py-1 text-xs border border-gray-300 rounded-md bg-white focus:outline-none focus:ring-1 focus:ring-green-400"
+                          >
+                            <option value="">— Select data column —</option>
+                            {availableFields.map((af) => (
+                              <option key={af.key} value={af.key}>{af.label}</option>
+                            ))}
+                          </select>
+                          {!isMappedToColumn && (
+                            <input
+                              type="text"
+                              value={staticVal}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setFieldMappings((prev) => {
+                                  if (!val) {
+                                    const n = { ...prev };
+                                    delete n[ff.name];
+                                    return n;
+                                  }
+                                  return { ...prev, [ff.name]: `__static:${val}` };
+                                });
+                              }}
+                              placeholder="Or type a fixed value..."
+                              className="w-full px-2 py-1 text-xs border border-gray-300 rounded-md bg-white focus:outline-none focus:ring-1 focus:ring-blue-400 placeholder-gray-400"
+                            />
+                          )}
+                        </div>
+                      )}
 
-                      {/* Preview value */}
-                      {mapped && preview !== undefined && preview !== null && (
+                      {/* Preview value from sample data */}
+                      {isMappedToColumn && preview !== undefined && preview !== null && (
                         <div className="mt-1.5 text-[10px] text-gray-500 truncate" title={String(preview)}>
                           Preview: <span className="text-gray-700 font-medium">{String(preview).slice(0, 60)}</span>
+                        </div>
+                      )}
+                      {isStaticValue && staticVal && (
+                        <div className="mt-1.5 text-[10px] text-blue-500">
+                          Fixed: <span className="font-medium">{staticVal}</span>
                         </div>
                       )}
                     </div>
