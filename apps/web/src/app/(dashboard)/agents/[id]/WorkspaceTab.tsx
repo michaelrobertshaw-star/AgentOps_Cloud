@@ -19,6 +19,7 @@ interface ToolField {
   key: string;
   label: string;
   type: string;
+  description?: string | null;
   enum_values?: string[] | null;
   unit?: string | null;
 }
@@ -68,6 +69,20 @@ const STEP_TYPES: { key: StepType; label: string; tag: string; color: string; bg
   { key: "create_view", label: "VIEW", tag: "ACTION", color: "text-blue-700", bg: "bg-blue-50 border-blue-300", description: "Display results as table or chart" },
   { key: "create_doc", label: "CREATE", tag: "CREATE", color: "text-purple-700", bg: "bg-purple-50 border-purple-300", description: "Generate a document per record" },
   { key: "save", label: "SAVE", tag: "ACTION", color: "text-amber-700", bg: "bg-amber-50 border-amber-300", description: "Save/export the output" },
+];
+
+// ── Smart default fields for PARSE step ──────────────────
+// These are the commonly useful fields shown when user clicks "clear default".
+// Matches the fields needed for the HCPF trip report PDF + common dispatch fields.
+const SMART_DEFAULT_FIELDS = [
+  "trip_id", "status", "name", "passenger_name", "phone",
+  "pickup_date", "arrive_date", "booked_date", "created_date", "close_date",
+  "address.formatted", "destination.formatted",
+  "driver.name", "driver.phone",
+  "distance", "fare", "estimate_fare",
+  "account.name", "account_name",
+  "payment.signature", "payment.status",
+  "source", "contact_date",
 ];
 
 // ── Step default persistence (localStorage) ──────────────────
@@ -616,7 +631,14 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
             id: step.id, order: idx + 1, type: "action" as const,
             label: `Pull from ${resources.find((r) => r.tool_name === step.config.tool_name)?.display_name ?? step.config.tool_name}`,
             operation: "pull_data",
-            config: { tool_name: step.config.tool_name, tool_params: step.config.params ?? {}, signature_display: step.config.signature_display },
+            config: {
+              tool_name: step.config.tool_name,
+              tool_params: {
+                ...(step.config.params ?? {}),
+                ...((() => { try { const p = JSON.parse(step.config.custom_json as string || "{}"); return typeof p === "object" && p !== null && !Array.isArray(p) ? p : {}; } catch { return {}; } })()),
+              },
+              signature_display: step.config.signature_display,
+            },
             source_text: "",
           };
         case "filter":
@@ -644,7 +666,7 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
               template_id: step.config.template,
               output_format: step.config.doc_type ?? "pdf",
               per_row: step.config.per_record ?? true,
-              filename_pattern: step.config.filename_pattern ?? "",
+              filename_pattern: step.config.filename_pattern ?? "{trip_id}-{name}.pdf",
             },
             source_text: "",
           };
@@ -683,6 +705,32 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
         ...prev,
         [stepId]: { loading: false, data: result, error: result.error ?? null, showRaw: false },
       }));
+
+      // After a successful PULL test, update probed fields from actual output columns
+      const testedStep = steps.find((s) => s.id === stepId);
+      if (testedStep?.type === "pull" && result.output_data && Array.isArray(result.output_data) && result.output_data.length > 0) {
+        const sampleRow = result.output_data[0];
+        const keys = Object.keys(sampleRow);
+        const newFields = keys.map((key) => {
+          const val = sampleRow[key];
+          const parts = key.split(".");
+          const leaf = parts[parts.length - 1];
+          const label = (parts.length > 1 ? parts.slice(-2) : [leaf])
+            .join(" ")
+            .replace(/_/g, " ")
+            .replace(/([a-z])([A-Z])/g, "$1 $2")
+            .replace(/\b\w/g, (c: string) => c.toUpperCase());
+          return {
+            key,
+            label,
+            type: typeof val === "number" ? "number" : typeof val === "boolean" ? "boolean" : typeof val === "string" && /^\d{4}-\d{2}-\d{2}/.test(val) ? "date" : "string",
+            sample_value: val != null ? String(val).slice(0, 100) : null,
+            unit: key.toLowerCase().includes("distance") ? "miles" : key.toLowerCase().includes("fare") ? "dollars" : null,
+          };
+        });
+        setProbedFields(newFields);
+        setProbedFieldCount(newFields.length);
+      }
     } catch (e) {
       setStepTestResults((prev) => ({
         ...prev,
@@ -776,7 +824,10 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
               operation: "pull_data",
               config: {
                 tool_name: step.config.tool_name,
-                tool_params: step.config.params ?? {},
+                tool_params: {
+                  ...(step.config.params ?? {}),
+                  ...((() => { try { const p = JSON.parse(step.config.custom_json as string || "{}"); return typeof p === "object" && p !== null && !Array.isArray(p) ? p : {}; } catch { return {}; } })()),
+                },
                 signature_display: step.config.signature_display,
               },
               source_text: "",
@@ -1132,11 +1183,20 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
                           save default
                         </button>
                       )}
-                      {getSavedStepDefault(step.type) && !savedDefaultFeedback[step.id] && (
+                      {(getSavedStepDefault(step.type) || step.type === "parse") && !savedDefaultFeedback[step.id] && (
                         <button
-                          onClick={() => { clearStepDefault(step.type); }}
+                          onClick={() => {
+                            clearStepDefault(step.type);
+                            // For PARSE: reset to smart defaults (not all 250+ raw fields)
+                            if (step.type === "parse" && outputFields.length > 0) {
+                              const smartFields = outputFields
+                                .filter((f) => SMART_DEFAULT_FIELDS.some((sd) => f.key === sd || f.key.endsWith("." + sd)))
+                                .map((f) => f.key);
+                              updateStep(step.id, { fields: smartFields.length > 0 ? smartFields : outputFields.map((f) => f.key) });
+                            }
+                          }}
                           className="text-gray-300 hover:text-amber-500 text-xs"
-                          title="Clear saved default"
+                          title={step.type === "parse" ? "Reset to smart defaults" : "Clear saved default"}
                         >
                           clear default
                         </button>
@@ -1337,7 +1397,10 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
                                     <div key={field.key} className="flex items-center gap-2 text-sm group">
                                       <span className="text-gray-400 text-xs font-medium w-10">Where</span>
 
-                                      <span className="text-gray-700 text-xs font-semibold bg-green-50 border border-green-200 rounded px-2 py-1 min-w-[120px]">
+                                      <span
+                                        className="text-gray-700 text-xs font-semibold bg-green-50 border border-green-200 rounded px-2 py-1 min-w-[120px] cursor-help"
+                                        title={`API param: ${field.key}${field.type ? ` (${field.type})` : ""}${field.description ? `\n${field.description}` : ""}`}
+                                      >
                                         {field.label}
                                       </span>
 
@@ -1416,6 +1479,46 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
                                 />
                               </div>
                             )}
+
+                            {/* Custom JSON query override */}
+                            <details className="mt-2">
+                              <summary className="text-[10px] text-gray-400 cursor-pointer hover:text-gray-600 select-none">
+                                Custom JSON query
+                              </summary>
+                              <div className="mt-1">
+                                <textarea
+                                  rows={4}
+                                  value={step.config.custom_json ?? ""}
+                                  onChange={(e) => {
+                                    const raw = e.target.value;
+                                    updateStep(step.id, { custom_json: raw });
+                                    // Try to parse and merge into params
+                                    try {
+                                      const parsed = JSON.parse(raw);
+                                      if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+                                        updateStep(step.id, { custom_json: raw, params: { ...params, ...parsed } });
+                                      }
+                                    } catch {
+                                      // Invalid JSON — keep raw text, don't merge
+                                    }
+                                  }}
+                                  placeholder={'{\n  "date_from": "2026-04-01",\n  "limit": 500\n}'}
+                                  className="w-full font-mono text-[11px] border border-gray-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-green-400 bg-gray-50"
+                                  spellCheck={false}
+                                />
+                                {step.config.custom_json && (() => {
+                                  try {
+                                    const p = JSON.parse(step.config.custom_json as string);
+                                    if (typeof p === "object" && p !== null && !Array.isArray(p)) {
+                                      return <span className="text-[10px] text-green-500">Valid JSON — merged into params</span>;
+                                    }
+                                    return <span className="text-[10px] text-red-400">Must be a JSON object</span>;
+                                  } catch {
+                                    return <span className="text-[10px] text-red-400">Invalid JSON</span>;
+                                  }
+                                })()}
+                              </div>
+                            </details>
                           </div>
                         );
                       })()}
@@ -1498,6 +1601,18 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
                             <span className="text-[10px] text-gray-300">|</span>
                             <span className="text-[10px] text-gray-400">{(step.config.fields as string[] ?? []).length}/{outputFields.length} selected</span>
                           </div>
+                        )}
+                        {probedFields.length === 0 && pullStep?.config.tool_name && (
+                          <button
+                            onClick={() => probeToolFields(pullStep.config.tool_name as string)}
+                            disabled={probing}
+                            className="px-2.5 py-1 rounded-lg text-[11px] font-medium border border-orange-300 text-orange-600 hover:bg-orange-50 transition-colors disabled:opacity-50"
+                          >
+                            {probing ? "Discovering..." : "🔍 Discover All Fields"}
+                          </button>
+                        )}
+                        {probeError && (
+                          <span className="text-[10px] text-red-500">{probeError}</span>
                         )}
                       </div>
                       {outputFields.length > 0 ? (
@@ -2137,7 +2252,13 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
         <Suspense fallback={<div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center"><div className="animate-spin h-8 w-8 border-3 border-green-500 border-t-transparent rounded-full" /></div>}>
           <TemplateDesigner
             templateId={designerTemplateId}
-            availableFields={outputFields.map((f) => ({ key: f.key, label: f.label }))}
+            availableFields={
+              // Only show fields that were selected in the PARSE step (not all 80+ raw API fields)
+              (selectedFields.length > 0
+                ? outputFields.filter((f) => selectedFields.includes(f.key))
+                : outputFields
+              ).map((f) => ({ key: f.key, label: f.label }))
+            }
             sampleRow={sampleRow}
             onSave={() => { setDesignerTemplateId(null); fetchTemplates(); }}
             onClose={() => setDesignerTemplateId(null)}

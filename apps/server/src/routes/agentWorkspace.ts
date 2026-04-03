@@ -203,6 +203,7 @@ Return ONLY valid JSON, no markdown fences.`;
                  jsonb_array_length(pipeline) as step_count
           FROM workspace_workflows
           WHERE company_id = ${companyId} AND agent_id = ${agentId}
+            AND name != '__step_test__'
           ORDER BY updated_at DESC
         `);
         const rows = ((result as any).rows ?? result) as any[];
@@ -501,6 +502,7 @@ Return ONLY valid JSON, no markdown fences.`;
             return {
               key,
               label: schema.description || key.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase()),
+              description: schema.description || null,
               type: fieldType,
               enum_values: schema.enum ?? null,
               unit: key.toLowerCase().includes("distance") || key.toLowerCase().includes("miles") ? "miles" :

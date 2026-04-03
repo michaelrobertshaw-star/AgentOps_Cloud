@@ -7,11 +7,35 @@ const BACKEND = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
  * Catch-all proxy for /api/workspace/* routes (templates, runs/files).
  * Reads httpOnly access_token cookie server-side and forwards as Bearer token.
  */
+async function tryRefreshToken(): Promise<{ accessToken: string; refreshToken: string } | null> {
+  try {
+    const cookieStore = await cookies();
+    const refreshToken = cookieStore.get("refresh_token")?.value;
+    if (!refreshToken) return null;
+    const res = await fetch(`${BACKEND}/api/auth/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refreshToken }),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as { accessToken: string; refreshToken: string };
+  } catch {
+    return null;
+  }
+}
+
 async function proxyToBackend(request: NextRequest, subpath: string[]) {
   const cookieStore = await cookies();
-  const token = cookieStore.get("access_token")?.value;
+  let token = cookieStore.get("access_token")?.value;
+  let refreshedTokens: { accessToken: string; refreshToken: string } | null = null;
+
   if (!token) {
-    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+    // Try refresh before giving up
+    refreshedTokens = await tryRefreshToken();
+    if (!refreshedTokens) {
+      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+    }
+    token = refreshedTokens.accessToken;
   }
 
   const backendPath = `/api/workspace/${subpath.join("/")}`;
@@ -40,28 +64,56 @@ async function proxyToBackend(request: NextRequest, subpath: string[]) {
     }
   }
 
-  const response = await fetch(url.toString(), {
+  let response = await fetch(url.toString(), {
     method,
     headers,
     body: body ? (body instanceof ArrayBuffer ? Buffer.from(body) : body) : undefined,
   });
 
+  // If 401 and we haven't refreshed yet, try refreshing and retry once
+  if (response.status === 401 && !refreshedTokens) {
+    refreshedTokens = await tryRefreshToken();
+    if (refreshedTokens) {
+      token = refreshedTokens.accessToken;
+      headers.Authorization = `Bearer ${token}`;
+      response = await fetch(url.toString(), {
+        method,
+        headers,
+        body: body ? (body instanceof ArrayBuffer ? Buffer.from(body) : body) : undefined,
+      });
+    }
+  }
+
+  // If we refreshed tokens, set new cookies on the outgoing response
+  function applyRefreshedCookies(resp: NextResponse) {
+    if (refreshedTokens) {
+      const isProduction = process.env.NODE_ENV === "production";
+      resp.cookies.set("access_token", refreshedTokens.accessToken, {
+        httpOnly: true, secure: isProduction, sameSite: "lax", path: "/", maxAge: 900,
+      });
+      resp.cookies.set("refresh_token", refreshedTokens.refreshToken, {
+        httpOnly: true, secure: isProduction, sameSite: "lax", path: "/", maxAge: 604800,
+      });
+    }
+    return resp;
+  }
+
   const respCt = response.headers.get("content-type") || "";
   if (respCt.includes("application/pdf")) {
     const buf = await response.arrayBuffer();
-    return new NextResponse(buf, {
+    return applyRefreshedCookies(new NextResponse(buf, {
       status: response.status,
       headers: {
         "Content-Type": "application/pdf",
         "Content-Disposition": response.headers.get("content-disposition") || "inline",
       },
-    });
+    }));
   }
 
   const text = await response.text();
   let data: unknown;
   try { data = JSON.parse(text); } catch { data = { raw: text }; }
-  return NextResponse.json(data, { status: response.status });
+  return applyRefreshedCookies(NextResponse.json(data, { status: response.status }));
 }
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {

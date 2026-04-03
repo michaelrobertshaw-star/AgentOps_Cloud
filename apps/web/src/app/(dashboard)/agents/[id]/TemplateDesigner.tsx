@@ -20,6 +20,7 @@ interface PdfFormField {
   pageIndex?: number;
   pageWidth?: number;
   pageHeight?: number;
+  options?: string[];
 }
 
 // ── Shared helpers ──────────────────────────────────────────────
@@ -268,7 +269,7 @@ export default function TemplateDesigner({
           const allFields = schema.form_fields as PdfFormField[];
           // Coverage: exclude __sig_* position keys and radio fields from the count
           const realMappingCount = Object.keys(initialMappings).filter((k) => !k.startsWith("__sig_")).length;
-          const mappableFields = allFields.filter((f: PdfFormField) => f.type !== "radio");
+          const mappableFields = allFields; // Include radio fields in coverage count — they're now mappable
           const coverage = mappableFields.length > 0 ? realMappingCount / mappableFields.length : 1;
 
           if (coverage < 0.3) {
@@ -1005,10 +1006,16 @@ export default function TemplateDesigner({
                         <div className="space-y-2">
                           <p className="text-[9px] text-pink-500 font-medium">Tap a column to place the signature image at this field's location:</p>
                           <div className="flex flex-wrap gap-1.5">
-                            {availableFields.map((af) => {
+                            {availableFields
+                              .filter((af) => {
+                                // For signature fields, only show columns that look like image/signature URLs
+                                const looksLikeImage = /sig|sign|image|photo|img|url/i.test(af.key + af.label);
+                                const isCurrentlyMapped = mapped === af.key;
+                                return looksLikeImage || isCurrentlyMapped;
+                              })
+                              .map((af) => {
                               const isSelected = mapped === af.key;
-                              // Highlight columns that look like image/signature data
-                              const looksLikeImage = /sig|sign|image|photo|img|url/i.test(af.key + af.label);
+                              const looksLikeImage = true; // all remaining pills are image-like (pre-filtered above)
                               return (
                                 <button
                                   key={af.key}
@@ -1108,26 +1115,58 @@ export default function TemplateDesigner({
                           </select>
                         </div>
                       ) : ff.type === "radio" ? (
-                        /* Radio: static value input + column mapping */
+                        /* Radio: clickable option buttons + column mapping fallback */
                         <div className="space-y-1.5">
-                          <input
-                            type="text"
-                            value={staticVal}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setFieldMappings((prev) => {
-                                if (!val) {
-                                  const n = { ...prev };
-                                  delete n[ff.name];
-                                  return n;
-                                }
-                                return { ...prev, [ff.name]: `__static:${val}` };
-                              });
-                            }}
-                            placeholder="Type value to select..."
-                            className="w-full px-2 py-1 text-xs border border-gray-300 rounded-md bg-white focus:outline-none focus:ring-1 focus:ring-orange-400"
-                          />
-                          <div className="text-[9px] text-gray-400 uppercase tracking-wide">or map to column:</div>
+                          {ff.options && ff.options.length > 0 ? (
+                            <>
+                              <div className="flex flex-wrap gap-1.5">
+                                {ff.options.map((opt) => {
+                                  const isSelected = staticVal === opt || mapped === `__static:${opt}`;
+                                  return (
+                                    <button
+                                      key={opt}
+                                      onClick={() => {
+                                        setFieldMappings((prev) => {
+                                          if (isSelected) {
+                                            const n = { ...prev };
+                                            delete n[ff.name];
+                                            return n;
+                                          }
+                                          return { ...prev, [ff.name]: `__static:${opt}` };
+                                        });
+                                      }}
+                                      className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium border transition-all ${
+                                        isSelected
+                                          ? "bg-orange-500 border-orange-500 text-white shadow-sm"
+                                          : "bg-white border-gray-300 text-gray-600 hover:bg-orange-50 hover:border-orange-300"
+                                      }`}
+                                    >
+                                      {isSelected && <span className="mr-1">●</span>}{opt}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                              <div className="text-[9px] text-gray-400 uppercase tracking-wide">or map to column:</div>
+                            </>
+                          ) : (
+                            <input
+                              type="text"
+                              value={staticVal}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setFieldMappings((prev) => {
+                                  if (!val) {
+                                    const n = { ...prev };
+                                    delete n[ff.name];
+                                    return n;
+                                  }
+                                  return { ...prev, [ff.name]: `__static:${val}` };
+                                });
+                              }}
+                              placeholder="Type value to select..."
+                              className="w-full px-2 py-1 text-xs border border-gray-300 rounded-md bg-white focus:outline-none focus:ring-1 focus:ring-orange-400"
+                            />
+                          )}
                           <select
                             value={isMappedToColumn ? mapped : ""}
                             onChange={(e) => {
@@ -1148,6 +1187,36 @@ export default function TemplateDesigner({
                               <option key={af.key} value={af.key}>{af.label}</option>
                             ))}
                           </select>
+                          {/* Derive from column with formula (e.g. AM/PM from time) */}
+                          <div className="text-[9px] text-gray-400 uppercase tracking-wide">or derive AM/PM from:</div>
+                          <select
+                            value={mapped?.startsWith("__formula:") ? mapped.split(":")[1] : ""}
+                            onChange={(e) => {
+                              const col = e.target.value;
+                              setFieldMappings((prev) => {
+                                if (!col) {
+                                  if (prev[ff.name]?.startsWith("__formula:")) {
+                                    const n = { ...prev };
+                                    delete n[ff.name];
+                                    return n;
+                                  }
+                                  return prev;
+                                }
+                                return { ...prev, [ff.name]: `__formula:${col}:ampm` };
+                              });
+                            }}
+                            className="w-full px-2 py-1 text-xs border border-gray-300 rounded-md bg-white focus:outline-none focus:ring-1 focus:ring-blue-400"
+                          >
+                            <option value="">— Select time column —</option>
+                            {availableFields.map((af) => (
+                              <option key={af.key} value={af.key}>{af.label}</option>
+                            ))}
+                          </select>
+                          {mapped?.startsWith("__formula:") && (
+                            <div className="text-[10px] text-blue-500 font-medium">
+                              Will auto-select AM (00:00-11:59) or PM (12:00-23:59) from {mapped.split(":")[1]}
+                            </div>
+                          )}
                         </div>
                       ) : (
                         /* Text/dropdown/other: column dropdown + optional static value */

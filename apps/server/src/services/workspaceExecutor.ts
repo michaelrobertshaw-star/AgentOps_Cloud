@@ -220,109 +220,281 @@ export async function executeWorkflowPipeline(
               const wantSignature = !!historyParams.signature;
               delete historyParams.signature;
 
-              // ── "Newest first" offset calculation ──
-              // Some APIs (e.g., iCabbi /bookings/history) return data oldest-first
-              // and ignore date filter params. We detect this by checking for total_available
-              // in the response, then calculate the offset to fetch from the end.
+              // ── Paginated fetch with two strategies ──
+              // The iCabbi history API has quirks:
+              //  - Returns records oldest-first, ignores date_from/date_to params
+              //  - total_available is always the GLOBAL total (~538K), not filtered
+              //  - account param changes the offset space (loosely filters server-side)
+              //  - Offsets in the account-filtered space != offsets in the global space
+              //
+              // Strategy A (date-bounded): Binary search + forward scan in GLOBAL offset space
+              //   (no account filter), with client-side date + account filtering
+              // Strategy B (no dates): Offset jump to newest records with all params
+
               const requestedLimit = Number(historyParams.limit) || 100;
-              if (!historyParams.offset) {
-                // Probe call: fetch 1 record to discover total_available
-                const probeResult = await executeTool(toolId, companyId, { ...historyParams, limit: 1 }, agentId, runId);
+              const hasDateBounds = !!(cfg.tool_params?.date_from || cfg.tool_params?.date_to);
+              const dateFrom = cfg.tool_params?.date_from ? new Date(cfg.tool_params.date_from as string) : null;
+              const dateTo = cfg.tool_params?.date_to ? new Date(cfg.tool_params.date_to as string + "T23:59:59Z") : null;
+              const accountFilter = cfg.tool_params?.account as string | undefined;
+              const ABSOLUTE_MAX = 50_000;
+              const WALL_TIMEOUT_MS = 4 * 60 * 1000; // 4 minutes
+              let pullSuccess = false;
+
+              if (hasDateBounds) {
+                // ══════════════════════════════════════════════
+                // Strategy A: Date-bounded — binary search + forward scan
+                // Uses GLOBAL offset space (no account filter) for consistency
+                // ══════════════════════════════════════════════
+                const scanParams: Record<string, unknown> = {};
+                if (historyParams.status) scanParams.status = historyParams.status;
+
+                // Probe for global total_available
+                let totalAvailable = 500_000; // fallback
+                const probeResult = await executeTool(toolId, companyId, { ...scanParams, limit: 1 }, agentId, runId);
                 if (probeResult.success) {
                   const probeResp = probeResult.response as any;
-                  const totalAvailable = probeResp?.body?.total_available ?? probeResp?.total_available;
-                  if (typeof totalAvailable === "number" && totalAvailable > requestedLimit) {
-                    // Offset to get the MOST RECENT records
-                    const newestOffset = Math.max(0, totalAvailable - requestedLimit);
-                    historyParams.offset = newestOffset;
-                    console.log(`[WorkspaceExec] API has ${totalAvailable} total records. Setting offset=${newestOffset} to get newest ${requestedLimit}`);
+                  const ta = probeResp?.body?.total_available ?? probeResp?.total_available;
+                  if (typeof ta === "number") totalAvailable = ta;
+                  console.log(`[WorkspaceExec] Global total_available: ${totalAvailable}`);
+                }
+
+                // ── Binary search for date_from offset (16 iterations) ──
+                let lo = 0;
+                let hi = totalAvailable;
+                const targetDate = dateFrom || new Date("2000-01-01");
+                console.log(`[WorkspaceExec] Binary searching for offset near ${targetDate.toISOString().slice(0, 10)} (range 0..${hi})`);
+
+                for (let i = 0; i < 16; i++) {
+                  const mid = Math.floor((lo + hi) / 2);
+                  if (mid === lo) break; // converged
+                  const probeExec = await executeTool(toolId, companyId, { ...scanParams, limit: 1, offset: mid }, agentId, runId);
+                  if (!probeExec.success) { hi = mid; continue; }
+                  const probeRows = extractDataset(probeExec.response);
+                  if (probeRows.length === 0) { hi = mid; continue; }
+                  const flatProbeRow = flattenObject(probeRows[0] as Record<string, unknown>);
+                  const rowDateStr = flatProbeRow["pickup_date"] || flatProbeRow["pickup_time"] || flatProbeRow["date"] || flatProbeRow["created_date"] || flatProbeRow["pickup.date"];
+                  if (!rowDateStr) { lo = mid + 1; continue; }
+                  const rowDate = new Date(rowDateStr as string);
+                  console.log(`[WorkspaceExec] BinSearch i=${i}: offset=${mid} → ${rowDate.toISOString().slice(0, 10)}`);
+                  if (rowDate < targetDate) lo = mid + 1;
+                  else hi = mid;
+
+                  await db.execute(sql`
+                    UPDATE workspace_runs SET step_results = ${JSON.stringify([...stepResults, {
+                      stepId: step.id, label: step.label, status: "running",
+                      rowCount: 0, duration_ms: Date.now() - stepStartMs,
+                      message: `Finding date range: step ${i + 1}/16 (${rowDate.toISOString().slice(0, 10)})`,
+                    }])}
+                    WHERE id = ${runId}
+                  `);
+                }
+
+                // Back up a bit to not miss boundary records
+                let currentOffset = Math.max(0, lo - 500);
+                console.log(`[WorkspaceExec] Binary search done. Forward scan from offset=${currentOffset}`);
+
+                // ── Forward scan with client-side date + account filtering ──
+                const SCAN_PAGE = 200;
+                const accountPattern = accountFilter
+                  ? new RegExp(`\\b${accountFilter.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i")
+                  : null;
+                const allMatchedRows: Record<string, unknown>[] = [];
+                let pageNum = 0;
+                let consecutiveAfterRange = 0;
+
+                while (allMatchedRows.length < ABSOLUTE_MAX) {
+                  // Wall-clock timeout
+                  if (Date.now() - stepStartMs > WALL_TIMEOUT_MS) {
+                    console.log(`[WorkspaceExec] Wall timeout (4min) reached with ${allMatchedRows.length} records`);
+                    break;
                   }
+
+                  const batchParams = { ...scanParams, limit: SCAN_PAGE, offset: currentOffset };
+                  const execResult = await executeTool(toolId, companyId, batchParams, agentId, runId);
+                  if (!execResult.success) {
+                    if (allMatchedRows.length === 0) {
+                      console.error(`[WorkspaceExec] pull_data failed:`, execResult.error);
+                      stepResults.push({
+                        stepId: step.id, label: step.label, status: "error" as const,
+                        rowCount: 0, duration_ms: Date.now() - stepStartMs,
+                        message: execResult.error ?? "Pull failed",
+                      });
+                    }
+                    break;
+                  }
+
+                  const pageRows = extractDataset(execResult.response);
+                  if (pageRows.length === 0) break;
+                  pageNum++;
+
+                  let keptCount = 0;
+                  let afterRangeCount = 0;
+                  for (const row of pageRows) {
+                    const flat = flattenObject(row);
+                    const dateStr = flat["pickup_date"] || flat["pickup_time"] || flat["date"] || flat["created_date"] || flat["pickup.date"];
+                    if (!dateStr) continue;
+                    const rowDate = new Date(dateStr as string);
+                    if (dateFrom && rowDate < dateFrom) continue;
+                    if (dateTo && rowDate > dateTo) { afterRangeCount++; continue; }
+                    // Account filter (strict word-boundary match)
+                    if (accountPattern) {
+                      const ref = String(flat["account.ref"] ?? flat["account_ref"] ?? "");
+                      const name = String(flat["account.name"] ?? flat["account_name"] ?? "");
+                      if (!accountPattern.test(ref) && !accountPattern.test(name)) continue;
+                    }
+                    allMatchedRows.push(flat);
+                    keptCount++;
+                  }
+
+                  console.log(`[WorkspaceExec] Page ${pageNum} (offset=${currentOffset}): ${pageRows.length} raw, ${keptCount} kept, ${afterRangeCount} after range (total: ${allMatchedRows.length})`);
+
+                  // Stop if entire page is past date_to
+                  if (afterRangeCount === pageRows.length) {
+                    consecutiveAfterRange++;
+                    if (consecutiveAfterRange >= 2) {
+                      console.log(`[WorkspaceExec] 2 consecutive pages past date_to — stopping`);
+                      break;
+                    }
+                  } else {
+                    consecutiveAfterRange = 0;
+                  }
+
+                  await db.execute(sql`
+                    UPDATE workspace_runs SET step_results = ${JSON.stringify([...stepResults, {
+                      stepId: step.id, label: step.label, status: "running",
+                      rowCount: allMatchedRows.length, duration_ms: Date.now() - stepStartMs,
+                      message: `Scanning: page ${pageNum}, ${allMatchedRows.length} matches so far...`,
+                    }])}
+                    WHERE id = ${runId}
+                  `);
+
+                  currentOffset += pageRows.length;
+                  if (pageRows.length < SCAN_PAGE) break; // Last page
+                }
+
+                if (allMatchedRows.length > 0) {
+                  // Already flattened during scan; reverse for newest-first
+                  dataset = allMatchedRows;
+                  dataset.reverse();
+                  console.log(`[WorkspaceExec] Date-bounded pull: ${dataset.length} records (newest-first) from ${pageNum} pages`);
+                  pullSuccess = true;
+                }
+
+              } else {
+                // ══════════════════════════════════════════════
+                // Strategy B: Non-date-bounded — offset jump to newest
+                // Uses original params (including account) since offset space is consistent
+                // when we jump relative to the same filtered total
+                // ══════════════════════════════════════════════
+                if (!historyParams.offset) {
+                  const probeResult = await executeTool(toolId, companyId, { ...historyParams, limit: 1 }, agentId, runId);
+                  if (probeResult.success) {
+                    const probeResp = probeResult.response as any;
+                    const totalAvailable = probeResp?.body?.total_available ?? probeResp?.total_available;
+                    if (typeof totalAvailable === "number" && totalAvailable > requestedLimit) {
+                      historyParams.offset = Math.max(0, totalAvailable - requestedLimit);
+                      console.log(`[WorkspaceExec] API has ${totalAvailable} total records. Setting offset=${historyParams.offset} to get newest ${requestedLimit}`);
+                    }
+                  }
+                }
+
+                const execResult = await executeTool(toolId, companyId, historyParams, agentId, runId);
+                if (execResult.success) {
+                  const rawDataset = extractDataset(execResult.response);
+                  dataset = rawDataset.map(row => flattenObject(row));
+                  dataset.reverse();
+                  console.log(`[WorkspaceExec] pull_data extracted ${dataset.length} records (flattened, newest-first)`);
+
+                  // Post-filter: strict account match (API's account param is loose contains)
+                  if (accountFilter && dataset.length > 0) {
+                    const pattern = new RegExp(`\\b${accountFilter.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+                    const before = dataset.length;
+                    dataset = dataset.filter(row => {
+                      const ref = String(row["account.ref"] ?? row["account_ref"] ?? "");
+                      const name = String(row["account.name"] ?? row["account_name"] ?? "");
+                      return pattern.test(ref) || pattern.test(name);
+                    });
+                    if (dataset.length < before) {
+                      console.log(`[WorkspaceExec] Post-filter: "${accountFilter}" kept ${dataset.length}/${before}`);
+                    }
+                  }
+
+                  pullSuccess = true;
+                } else {
+                  console.error(`[WorkspaceExec] pull_data failed:`, execResult.error);
                 }
               }
 
-              const execResult = await executeTool(toolId, companyId, historyParams, agentId, runId);
-              if (execResult.success) {
-                const rawDataset = extractDataset(execResult.response);
-                // Flatten nested objects so dot-notation keys (account.name, driver.name)
-                // match the probed field names used in PARSE/pick steps
-                dataset = rawDataset.map(row => flattenObject(row));
-                // Reverse so newest are first (API returns oldest-first even at high offset)
-                dataset.reverse();
-                console.log(`[WorkspaceExec] pull_data extracted ${dataset.length} records (flattened, newest-first) from API response`);
+              // ── Signature enrichment (both strategies) ──
+              if (wantSignature && dataset.length > 0) {
+                const SIG_CAP = 500;
+                const sigSlice = dataset.slice(0, SIG_CAP);
+                if (dataset.length > SIG_CAP) {
+                  console.log(`[WorkspaceExec] Signature enrichment capped at ${SIG_CAP}/${dataset.length} records`);
+                }
+                console.log(`[WorkspaceExec] Signature enrichment: fetching ${sigSlice.length} bookings...`);
 
-                // ── Signature enrichment ──
-                // The history endpoint doesn't return signatures. When signature is requested,
-                // fetch each booking individually via get_booking tool with ?signature=true
-                if (wantSignature && dataset.length > 0) {
-                  console.log(`[WorkspaceExec] Signature enrichment: fetching ${dataset.length} individual bookings...`);
-                  const sigToolResult = await db.execute(sql`
-                    SELECT t.id FROM tools t
-                    JOIN connectors c ON c.id = t.connector_id
-                    JOIN agent_connectors ac ON ac.connector_id = c.id
-                    WHERE ac.agent_id = ${agentId} AND t.name = 'get_booking' AND t.company_id = ${companyId}
-                    LIMIT 1
-                  `);
-                  const sigToolRows = ((sigToolResult as any).rows ?? sigToolResult) as any[];
+                const sigToolResult = await db.execute(sql`
+                  SELECT t.id FROM tools t
+                  JOIN connectors c ON c.id = t.connector_id
+                  JOIN agent_connectors ac ON ac.connector_id = c.id
+                  WHERE ac.agent_id = ${agentId} AND t.name = 'get_booking' AND t.company_id = ${companyId}
+                  LIMIT 1
+                `);
+                const sigToolRows = ((sigToolResult as any).rows ?? sigToolResult) as any[];
 
-                  if (sigToolRows.length > 0) {
-                    const sigToolId = sigToolRows[0].id;
-                    let enriched = 0;
-                    let enrichErrors = 0;
+                // Ensure payment.signature key exists on ALL rows
+                for (const row of dataset) {
+                  if (!("payment.signature" in row)) row["payment.signature"] = null;
+                }
 
-                    // Ensure payment.signature key exists on ALL rows so the column always appears
-                    for (const row of dataset) {
-                      if (!("payment.signature" in row)) row["payment.signature"] = null;
-                    }
+                if (sigToolRows.length > 0) {
+                  const sigToolId = sigToolRows[0].id;
+                  let enriched = 0;
+                  let enrichErrors = 0;
+                  const SIG_BATCH = 10;
 
-                    for (let i = 0; i < dataset.length; i++) {
-                      const row = dataset[i];
+                  for (let bStart = 0; bStart < sigSlice.length; bStart += SIG_BATCH) {
+                    const batch = sigSlice.slice(bStart, bStart + SIG_BATCH);
+                    await Promise.all(batch.map(async (row) => {
                       const tripId = row["trip_id"] || row["perma_id"] || row["id"];
-                      if (!tripId) continue;
-
+                      if (!tripId) return;
                       try {
                         const sigResult = await executeTool(sigToolId, companyId, {
-                          trip_id: String(tripId),
-                          signature: true,
+                          trip_id: String(tripId), signature: true,
                         }, agentId, runId);
-
                         if (sigResult.success) {
                           const sigData = sigResult.response as any;
-                          // Navigate to payment.signature in the individual booking response
                           const booking = sigData?.body?.booking || sigData?.booking || sigData;
                           const sigUrl = booking?.payment?.signature;
-                          row["payment.signature"] = sigUrl ?? null; // Always set, even if null
+                          row["payment.signature"] = sigUrl ?? null;
                           if (sigUrl) enriched++;
                         }
-                      } catch {
-                        enrichErrors++;
-                      }
+                      } catch { enrichErrors++; }
+                    }));
 
-                      // Progress update every 10 rows
-                      if (i % 10 === 0) {
-                        await db.execute(sql`
-                          UPDATE workspace_runs SET step_results = ${JSON.stringify([...stepResults, {
-                            stepId: step.id, label: step.label, status: "running",
-                            rowCount: dataset.length, duration_ms: Date.now() - stepStartMs,
-                            message: `Fetching signatures: ${i + 1}/${dataset.length} (${enriched} found)...`,
-                          }])}
-                          WHERE id = ${runId}
-                        `);
-                      }
-                    }
-                    console.log(`[WorkspaceExec] Signature enrichment complete: ${enriched} signatures found, ${enrichErrors} errors`);
-                  } else {
-                    console.log(`[WorkspaceExec] WARNING: get_booking tool not found, skipping signature enrichment`);
+                    const done = Math.min(bStart + SIG_BATCH, sigSlice.length);
+                    await db.execute(sql`
+                      UPDATE workspace_runs SET step_results = ${JSON.stringify([...stepResults, {
+                        stepId: step.id, label: step.label, status: "running",
+                        rowCount: dataset.length, duration_ms: Date.now() - stepStartMs,
+                        message: `Fetching signatures: ${done}/${sigSlice.length} (${enriched} found)...`,
+                      }])}
+                      WHERE id = ${runId}
+                    `);
                   }
+                  console.log(`[WorkspaceExec] Signature enrichment: ${enriched} found, ${enrichErrors} errors`);
+                } else {
+                  console.log(`[WorkspaceExec] WARNING: get_booking tool not found, skipping signature enrichment`);
                 }
-              } else {
-                console.error(`[WorkspaceExec] pull_data failed:`, execResult.error);
               }
+
               stepResults.push({
-                stepId: step.id, label: step.label, status: execResult.success ? "success" : "error",
+                stepId: step.id, label: step.label, status: pullSuccess ? "success" : "error",
                 rowCount: dataset.length, duration_ms: Date.now() - stepStartMs,
-                message: execResult.success
-                  ? `Retrieved ${dataset.length} records${wantSignature ? " (with signature enrichment)" : ""}`
-                  : execResult.error,
+                message: pullSuccess
+                  ? `Retrieved ${dataset.length} records${wantSignature ? " (with signatures)" : ""}${hasDateBounds ? ` from ${cfg.tool_params?.date_from} to ${cfg.tool_params?.date_to}` : ""}`
+                  : "Pull failed",
               });
             }
             break;
@@ -500,41 +672,64 @@ export async function executeWorkflowPipeline(
             const schema = tmpl.pdfme_schema as any;
             const isFormFill = schema?.mode === "form_fill";
 
-            // Server-side auto-map: if field_mappings are mostly empty, auto-map from dataset columns
+            // Guard: if dataset is empty, skip PDF generation with a clear message
+            if (dataset.length === 0) {
+              stepResults.push({
+                stepId: step.id, label: step.label, status: "error",
+                rowCount: 0, duration_ms: Date.now() - stepStartMs,
+                message: "No data rows to generate PDFs from. Check your PULL and PARSE steps.",
+              });
+              break;
+            }
+
+            // Server-side auto-map: if field_mappings are mostly empty or stale, auto-map from dataset columns
             try { if (isFormFill && dataset.length > 0) {
               const realMappings = Object.keys(fieldMappings).filter((k) => !k.startsWith("__sig_"));
               const formFields = (schema?.form_fields ?? []) as Array<{ name: string; type: string }>;
               // Exclude radio fields from coverage — they take static values not column mappings
-              const fillableFields = formFields.filter((f) => f.type !== "signature" && f.type !== "radio");
-              const coverage = fillableFields.length > 0 ? realMappings.length / fillableFields.length : 1;
+              const mappableFields = formFields.filter((f) => f.type !== "radio");
+              const dataColumns = Object.keys(dataset[0]);
 
-              if (coverage < 0.3) {
-                console.log("[WorkspaceExec] Low field mapping coverage, auto-mapping...", { coverage, realMappings: realMappings.length, fillableFields: fillableFields.length });
-                const dataColumns = Object.keys(dataset[0]);
+              // Check how many existing mappings actually resolve to real dataset columns
+              const validMappings = realMappings.filter((k) => {
+                const col = fieldMappings[k];
+                return col && (col.startsWith("__static:") || dataColumns.includes(col));
+              });
+              const coverage = mappableFields.length > 0 ? validMappings.length / mappableFields.length : 1;
+
+              if (coverage < 0.5) {
+                console.log("[WorkspaceExec] Low valid field mapping coverage, auto-mapping...", {
+                  coverage, validMappings: validMappings.length, totalMappings: realMappings.length,
+                  mappableFields: mappableFields.length, dataColumns,
+                });
                 const normalize = (s: string) => s.toLowerCase().replace(/'s\b/g, "").replace(/[_.\s\-\/()#]+/g, "").replace(/[']/g, "");
                 const aliases: Record<string, string[]> = {
                   membername: ["name", "passenger_name", "passengername"],
                   membersname: ["name", "passenger_name", "passengername"],
                   drivername: ["driver_name", "driver.name", "drivername"],
                   driversname: ["driver_name", "driver.name", "drivername"],
-                  tripdate: ["pickup_time", "pickup_date", "pickuptime", "pickupdate", "created_date"],
+                  tripdate: ["pickup_date", "pickup_time", "pickuptime", "pickupdate", "created_date"],
                   pickupaddress: ["pickup_address", "address.formatted", "addressformatted"],
                   pickupstreetaddresscitystatezip: ["pickup_address", "address.formatted", "addressformatted"],
                   dropoffaddress: ["dropoff_address", "destination.formatted", "destinationformatted"],
                   dropoffdestinationstreetaddresscitystatezip: ["dropoff_address", "destination.formatted", "destinationformatted"],
-                  memberhealthfirstcoloradoid: ["account_reference", "accountreference"],
+                  memberhealthfirstcoloradoid: ["account.name", "account_name", "account_reference", "accountreference"],
                   fareamount: ["fare_amount", "fareamount"],
                   distance: ["distance", "distance_miles", "distancemiles"],
                   bookingid: ["booking_id", "trip_id", "bookingid", "tripid"],
                   accountname: ["account_name", "account.name", "accountname"],
                   status: ["status"],
+                  // Signature aliases
+                  memberssignature: ["payment.signature", "signature_url", "signature"],
+                  signature: ["payment.signature", "signature_url", "signature"],
+                  driversignature: ["payment.signature", "signature_url", "signature"],
                 };
                 const usedCols = new Set<string>();
                 const sigKeys = Object.fromEntries(Object.entries(fieldMappings).filter(([k]) => k.startsWith("__sig_")));
                 const newMappings: Record<string, string> = { ...sigKeys };
 
                 for (const ff of formFields) {
-                  if (ff.type === "signature") continue;
+                  if (ff.type === "radio") continue; // Skip radio (static values), but allow signature
                   const normName = normalize(ff.name);
 
                   // 1. Exact match
@@ -546,8 +741,8 @@ export async function executeWorkflowPipeline(
                       if (matchCol) break;
                     }
                   }
-                  // 3. Substring match
-                  if (!matchCol) {
+                  // 3. Substring match (skip for signature fields — too ambiguous)
+                  if (!matchCol && ff.type !== "signature") {
                     matchCol = dataColumns.find((c) => !usedCols.has(c) && normalize(c).length > 2 && (normName.includes(normalize(c)) || normalize(c).includes(normName)));
                   }
                   if (matchCol) {
@@ -564,15 +759,29 @@ export async function executeWorkflowPipeline(
                 db.execute(sql`
                   UPDATE workspace_templates SET field_mappings = ${JSON.stringify(fieldMappings)}, updated_at = NOW()
                   WHERE id = ${cfg.template_id} AND company_id = ${companyId}
-                `).catch(() => {});
+                `).catch((err: unknown) => {
+                  console.error("[WorkspaceExec] Failed to persist auto-mapped field_mappings:", err);
+                });
               }
             } } catch (autoMapErr) {
               console.error("[WorkspaceExec] Auto-map failed, proceeding with existing mappings", { err: autoMapErr });
             }
 
+            // Validate: at least one real field mapping exists (not just __sig_ keys)
+            const realMappingCount = Object.keys(fieldMappings).filter((k) => !k.startsWith("__sig_")).length;
+            if (realMappingCount === 0) {
+              console.warn("[WorkspaceExec] No field mappings configured for template", { templateId: cfg.template_id });
+              stepResults.push({
+                stepId: step.id, label: step.label, status: "error",
+                rowCount: 0, duration_ms: Date.now() - stepStartMs,
+                message: "No field mappings configured. Open the Template Designer and map PDF fields to data columns.",
+              });
+              break;
+            }
+
             let pdfResults: Array<{ filename: string; s3Key: string; rowIndex: number }>;
             try {
-              console.log("[WorkspaceExec] Starting PDF generation", { isFormFill, mappingKeys: Object.keys(fieldMappings).filter(k => !k.startsWith("__sig_")), datasetLen: dataset.length });
+              console.log("[WorkspaceExec] Starting PDF generation", { isFormFill, realMappingCount, mappingKeys: Object.keys(fieldMappings).filter(k => !k.startsWith("__sig_")), datasetLen: dataset.length });
               if (isFormFill) {
                 const { generateBatchFormFillPdfs } = await import("./pdfGenerationService.js");
                 pdfResults = await generateBatchFormFillPdfs(

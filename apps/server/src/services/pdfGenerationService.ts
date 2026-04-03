@@ -15,6 +15,7 @@ import path from "path";
 import https from "https";
 import http from "http";
 import { spawnSync } from "child_process";
+import sharp from "sharp";
 
 const logger = pino({ name: "pdf-generation" });
 
@@ -331,14 +332,80 @@ export async function generateBatchPdfs(
 
 // ─── Form Fill Mode (pdf-lib) ────────────────────────────────────────────────
 
+export interface VisualRect {
+  x: number;      // visual x (left edge, in pts from left of displayed page)
+  y: number;      // visual y (top edge, in pts from top of displayed page)
+  width: number;  // visual width
+  height: number; // visual height
+}
+
 export interface PdfFormField {
   name: string;
   type: "text" | "checkbox" | "dropdown" | "radio" | "signature" | "unknown";
-  /** For signature fields: raw PDF rect position + page dimensions */
+  /** Raw PDF rect (unrotated AcroForm coordinates) */
   rect?: { x: number; y: number; width: number; height: number };
+  /** Visual rect (post-rotation, matches what the user sees on screen) */
+  visualRect?: VisualRect;
+  /** Page rotation angle (0, 90, 180, 270) */
+  rotation?: number;
   pageIndex?: number;
   pageWidth?: number;
   pageHeight?: number;
+  /** Available options for radio groups and dropdowns */
+  options?: string[];
+}
+
+// ─── Coordinate Transforms ─────────────────────────────────────────────────
+// Bidirectional transform between raw PDF coordinates and visual (displayed) coordinates.
+// Raw = AcroForm Rect coords (unrotated content stream, y=0 at bottom).
+// Visual = what the user sees after page rotation is applied (y=0 at top, like a canvas).
+
+/**
+ * Convert raw PDF rect to visual rect (what the user sees on screen).
+ * Used at upload time when extracting form fields.
+ */
+export function rawToVisual(
+  raw: { x: number; y: number; width: number; height: number },
+  pageWidth: number,   // post-rotation page width (getWidth())
+  pageHeight: number,  // post-rotation page height (getHeight())
+  rotation: number,
+): VisualRect {
+  switch (rotation) {
+    case 0:
+      return { x: raw.x, y: pageHeight - raw.y - raw.height, width: raw.width, height: raw.height };
+    case 90:
+      return { x: raw.y, y: raw.x, width: raw.height, height: raw.width };
+    case 180:
+      return { x: pageWidth - raw.x - raw.width, y: raw.y, width: raw.width, height: raw.height };
+    case 270:
+      return { x: pageHeight - raw.y - raw.height, y: pageWidth - raw.x - raw.width, width: raw.height, height: raw.width };
+    default:
+      return { x: raw.x, y: pageHeight - raw.y - raw.height, width: raw.width, height: raw.height };
+  }
+}
+
+/**
+ * Convert visual rect back to raw PDF coordinates for rendering.
+ * Used at PDF generation time to place signatures.
+ */
+export function visualToRaw(
+  visual: VisualRect,
+  pageWidth: number,
+  pageHeight: number,
+  rotation: number,
+): { x: number; y: number; width: number; height: number } {
+  switch (rotation) {
+    case 0:
+      return { x: visual.x, y: pageHeight - visual.y - visual.height, width: visual.width, height: visual.height };
+    case 90:
+      return { x: visual.y, y: visual.x, width: visual.height, height: visual.width };
+    case 180:
+      return { x: pageWidth - visual.x - visual.width, y: visual.y, width: visual.width, height: visual.height };
+    case 270:
+      return { x: pageWidth - visual.y - visual.height, y: pageHeight - visual.x - visual.width, width: visual.height, height: visual.width };
+    default:
+      return { x: visual.x, y: pageHeight - visual.y - visual.height, width: visual.width, height: visual.height };
+  }
 }
 
 /**
@@ -392,14 +459,31 @@ export async function extractFormFields(pdfBuffer: Buffer): Promise<PdfFormField
                 pageHeight = pages[idx].getHeight();
               }
             }
-            return { name, type, rect: { x: left, y: bottom, width, height }, pageIndex, pageWidth, pageHeight };
+            const rotation = pages[pageIndex].getRotation().angle;
+            const rect = { x: left, y: bottom, width, height };
+            const visualRect = rawToVisual(rect, pageWidth, pageHeight, rotation);
+            return { name, type, rect, visualRect, rotation, pageIndex, pageWidth, pageHeight };
           }
         } catch {
           // Fall through to basic return
         }
       }
 
-      return { name, type };
+      // Extract options for radio groups and dropdowns
+      let options: string[] | undefined;
+      if (type === "radio") {
+        try {
+          const radioGroup = form.getRadioGroup(name);
+          options = radioGroup.getOptions();
+        } catch { /* not a valid radio group */ }
+      } else if (type === "dropdown") {
+        try {
+          const dropdown = form.getDropdown(name);
+          options = dropdown.getOptions();
+        } catch { /* not a valid dropdown */ }
+      }
+
+      return { name, type, ...(options ? { options } : {}) };
     });
   } catch (err) {
     logger.debug({ err }, "No AcroForm fields found (non-fillable PDF)");
@@ -459,12 +543,70 @@ async function resolveImageBuffer(val: string): Promise<{ buf: Buffer; mime: str
 }
 
 /**
+ * Remove white/near-white background from a signature image.
+ * Converts the image to RGBA PNG, then makes all pixels with
+ * brightness above a threshold fully transparent.
+ *
+ * This preserves dark ink strokes while removing white paper/screen backgrounds.
+ */
+async function removeWhiteBackground(buf: Buffer): Promise<Buffer> {
+  const { data, info } = await sharp(buf)
+    .ensureAlpha()        // add alpha channel if missing (JPEG → RGBA)
+    .raw()                // get raw RGBA pixel data
+    .toBuffer({ resolveWithObject: true });
+
+  const { width, height, channels } = info;
+  const threshold = 240;  // near-white threshold (R,G,B all > 240 → transparent)
+
+  for (let i = 0; i < data.length; i += channels) {
+    const r = data[i], g = data[i + 1], b = data[i + 2];
+    if (r > threshold && g > threshold && b > threshold) {
+      data[i + 3] = 0; // set alpha to fully transparent
+    }
+  }
+
+  // Convert back to PNG, then trim transparent padding so only ink remains.
+  // This ensures every signature is cropped to its actual ink content —
+  // no more random whitespace offsets causing signatures to drift off the line.
+  const pngBuf = await sharp(data, { raw: { width, height, channels: 4 } })
+    .png()
+    .toBuffer();
+
+  try {
+    return await sharp(pngBuf)
+      .trim()       // crop transparent edges to ink bounding box
+      .toBuffer();
+  } catch {
+    // trim() can fail if the entire image is transparent (no ink) — return as-is
+    return pngBuf;
+  }
+}
+
+/**
  * Fill a single PDF form using pdf-lib. Preserves the original PDF exactly —
  * dimensions, fonts, checkboxes, everything. Only touches mapped fields.
  *
  * Signature fields: pdf-lib can't fill PDFSignature fields directly, so we
  * detect the field's rectangle, embed the image, and draw it on the page.
  */
+
+/** Derive a value from a source column using a named transform. */
+function applyFormula(value: string, transform: string): string {
+  if (transform === "ampm") {
+    // Extract hour from time strings: "14:30", "2:30 PM", "02:30:00", etc.
+    const match = value.match(/(\d{1,2})/);
+    if (!match) return "AM";
+    const hour = parseInt(match[1], 10);
+    return hour >= 12 ? "PM" : "AM";
+  }
+  return value; // unknown transform — pass through
+}
+
+/** Check if a value is effectively empty (null, undefined, "", 0, "0"). */
+function isEmptyValue(v: unknown): boolean {
+  return v === null || v === undefined || v === "" || v === 0 || v === "0";
+}
+
 export async function fillPdfForm(
   pdfBuffer: Buffer,
   data: Record<string, unknown>,
@@ -488,13 +630,39 @@ export async function fillPdfForm(
   }
 
   for (const [formFieldName, columnKey] of Object.entries(fieldMappings)) {
-    // Support static values: "__static:someValue" bypasses data lookup
     let strValue: string;
-    if (columnKey.startsWith("__static:")) {
+
+    if (columnKey.startsWith("__formula:")) {
+      // Reactive formula: __formula:sourceColumn:transformName
+      const parts = columnKey.split(":");
+      const sourceCol = parts[1];
+      const transform = parts[2];
+      const rawValue = data[sourceCol];
+      if (isEmptyValue(rawValue)) continue;
+      strValue = applyFormula(String(rawValue), transform);
+    } else if (columnKey.startsWith("__static:")) {
       strValue = columnKey.replace("__static:", "");
+    } else if (columnKey.includes("|")) {
+      // Pipe-delimited fallback: "primary|fallback|__static:default"
+      const candidates = columnKey.split("|");
+      let resolved = false;
+      for (const candidate of candidates) {
+        if (candidate.startsWith("__static:")) {
+          strValue = candidate.replace("__static:", "");
+          resolved = true;
+          break;
+        }
+        const rawValue = data[candidate];
+        if (!isEmptyValue(rawValue)) {
+          strValue = String(rawValue);
+          resolved = true;
+          break;
+        }
+      }
+      if (!resolved) continue;
     } else {
       const rawValue = data[columnKey];
-      if (rawValue === null || rawValue === undefined) continue;
+      if (isEmptyValue(rawValue)) continue;
       strValue = String(rawValue);
     }
 
@@ -515,12 +683,22 @@ export async function fillPdfForm(
       } else if (constructor === "PDFSignature") {
         // Signature fields can't be filled via AcroForm API — embed as image instead.
         console.log(`[fillPdfForm] Processing signature field: ${formFieldName}, value length: ${strValue.length}, starts: ${strValue.slice(0, 40)}`);
-        const imageData = await resolveImageBuffer(strValue);
+        let imageData = await resolveImageBuffer(strValue);
         if (!imageData) {
           console.error(`[fillPdfForm] No image data for signature field: ${formFieldName}`);
           continue;
         }
         console.log(`[fillPdfForm] Image resolved for ${formFieldName}: ${imageData.mime}, ${imageData.buf.length} bytes`);
+
+        // Remove white background from signature images so they don't overlay form text
+        try {
+          const cleanBuf = await removeWhiteBackground(imageData.buf);
+          imageData = { buf: cleanBuf, mime: "image/png" }; // always PNG after processing (supports alpha)
+          console.log(`[fillPdfForm] Background removed for ${formFieldName}: ${cleanBuf.length} bytes`);
+        } catch (err) {
+          console.warn(`[fillPdfForm] Background removal failed for ${formFieldName}, using original image:`, err);
+          // Fall through with original image
+        }
 
         const widgets = field.acroField.getWidgets();
         if (widgets.length === 0) continue;
@@ -541,17 +719,8 @@ export async function fillPdfForm(
         // Default: use the PDF AcroForm field's own rect for position + size
         const left = Math.min(x1, x2);
         const bottom = Math.min(y1, y2);
-        const fieldW = Math.abs(x2 - x1) || 200;
-        const fieldH = Math.abs(y2 - y1) || 50;
-        // Allow user-placed overrides (stored as __sig_x__/y__/w__/h__ in field_mappings)
-        const overrideX = fieldMappings[`__sig_x__${formFieldName}`];
-        const overrideY = fieldMappings[`__sig_y__${formFieldName}`];
-        const overrideW = fieldMappings[`__sig_w__${formFieldName}`];
-        const overrideH = fieldMappings[`__sig_h__${formFieldName}`];
-        const posX = overrideX !== undefined ? parseFloat(overrideX) : left;
-        const posY = overrideY !== undefined ? parseFloat(overrideY) : bottom;
-        const targetW = overrideW !== undefined ? parseFloat(overrideW) : fieldW;
-        const targetH = overrideH !== undefined ? parseFloat(overrideH) : fieldH;
+        let fieldW = Math.abs(x2 - x1) || 200;
+        let fieldH = Math.abs(y2 - y1) || 50;
 
         const pageRef = widget.P();
         const pages = doc.getPages();
@@ -561,7 +730,22 @@ export async function fillPdfForm(
           if (idx >= 0) targetPage = pages[idx];
         }
 
-        // Prefer PNG for transparency support
+        // ═══════════════════════════════════════════════════════════════════
+        // ROTATION-AGNOSTIC SIGNATURE RENDERING (Phase 1 redesign)
+        //
+        // All positioning is done in VISUAL space (what the user sees),
+        // then converted to raw PDF coordinates at draw time.
+        //
+        // TARGET BOX: 260pt wide × 220pt tall (visual space)
+        // POSITION:   Bottom edge 1 inch below signature field center,
+        //             horizontally centered on field
+        // BOLD:       9 sub-pixel offset draws
+        // ═══════════════════════════════════════════════════════════════════
+        const pageRotation = targetPage.getRotation().angle;
+        const pgW = targetPage.getWidth();   // post-rotation width
+        const pgH = targetPage.getHeight();  // post-rotation height
+
+        // Embed image (prefer PNG for transparency)
         let embeddedImage;
         if (imageData.mime.includes("png")) {
           embeddedImage = await doc.embedPng(imageData.buf);
@@ -569,27 +753,96 @@ export async function fillPdfForm(
           embeddedImage = await doc.embedJpg(imageData.buf);
         }
 
-        // Fit image within the target area, preserving aspect ratio
+        // Scale signature to fill the target box while preserving aspect ratio
         const imgAspect = embeddedImage.width / embeddedImage.height;
-        const targetAspect = targetW / targetH;
-        let drawW: number, drawH: number;
-        if (imgAspect > targetAspect) {
-          drawW = targetW;
-          drawH = targetW / imgAspect;
+        const TARGET_W = 260;  // visual width of the target box
+        const TARGET_H = 150;  // visual height of the target box (post-trim: tight enough to stay in zone, tall enough for vertical strokes)
+        let sigVisualW: number, sigVisualH: number;
+        if (imgAspect >= TARGET_W / TARGET_H) {
+          sigVisualW = TARGET_W;
+          sigVisualH = TARGET_W / imgAspect;
         } else {
-          drawH = targetH;
-          drawW = targetH * imgAspect;
+          sigVisualH = TARGET_H;
+          sigVisualW = TARGET_H * imgAspect;
         }
 
-        // Center the image on the (possibly overridden) position
-        const drawX = posX + (targetW - drawW) / 2;
-        const drawY = posY + (targetH - drawH) / 2;
+        // Compute the field's visual center from raw rect
+        const rawRect = { x: left, y: bottom, width: fieldW, height: fieldH };
+        const fieldVisual = rawToVisual(rawRect, pgW, pgH, pageRotation);
+        const fieldVisualCenterX = fieldVisual.x + fieldVisual.width / 2;
+        const fieldVisualCenterY = fieldVisual.y + fieldVisual.height / 2;
 
-        targetPage.drawImage(embeddedImage, { x: drawX, y: drawY, width: drawW, height: drawH });
+        // Position: centered horizontally on field.
+        // Bottom-align the ink so it sits ON the signature line, like a real signature.
+        // The line is roughly at fieldVisualCenterY + 15pt (reduced from 72pt post-trim).
+        // We let 15% of the signature height dip below the line (for descenders like g, y, j).
+        const sigLineY = fieldVisualCenterY + 15;
+        const descenderAllowance = sigVisualH * 0.15;
+        const sigVisualX = fieldVisualCenterX - sigVisualW / 2;
+        const sigVisualY = sigLineY - sigVisualH + descenderAllowance;  // ink sits on the line
+
+        // Convert visual placement back to raw PDF coordinates
+        const sigVisual: VisualRect = { x: sigVisualX, y: sigVisualY, width: sigVisualW, height: sigVisualH };
+        const sigRaw = visualToRaw(sigVisual, pgW, pgH, pageRotation);
+
+        console.log(`[fillPdfForm] Signature "${formFieldName}" rot=${pageRotation} fieldVisualCenter=(${fieldVisualCenterX.toFixed(1)},${fieldVisualCenterY.toFixed(1)}) sigVisual=(${sigVisualX.toFixed(1)},${sigVisualY.toFixed(1)},${sigVisualW.toFixed(1)}x${sigVisualH.toFixed(1)}) sigRaw=(${sigRaw.x.toFixed(1)},${sigRaw.y.toFixed(1)},${sigRaw.width.toFixed(1)}x${sigRaw.height.toFixed(1)})`);
+
+        // BOLD offsets: 9 draws for heavier strokes
+        const boldOffsets = [
+          [0, 0],
+          [0.5, 0], [-0.5, 0], [0, 0.5], [0, -0.5],
+          [0.35, 0.35], [-0.35, 0.35], [0.35, -0.35], [-0.35, -0.35],
+        ];
+
+        // Draw the signature image so it appears upright on the displayed page.
+        // On non-rotated pages, drawImage works directly.
+        // On rotated pages, we must counter-rotate the image in the content stream
+        // so that when the page rotation is applied, the image appears upright.
+        if (pageRotation === 90 || pageRotation === 270) {
+          // For rotated pages: use a transformation matrix to counter-rotate.
+          // The visual coords give us WHERE the image should appear.
+          // We draw in raw space using a CW rotation matrix that makes the image
+          // appear upright after the page's CCW rotation is applied.
+          //
+          // CW 90° matrix: [0, 1, -1, 0, tx, ty]
+          // This draws the image rotated 90° CW in raw space,
+          // which appears upright after the page's 90° rotation.
+          const { pushGraphicsState, popGraphicsState, concatTransformationMatrix } = await import("pdf-lib");
+
+          // tx/ty position the rotated image so its visual center matches our target
+          // For CW matrix [0,1,-1,0,tx,ty]: image spans raw x:[tx-drawH, tx], y:[ty, ty+drawW]
+          // Center in raw space: ((tx-sigVisualH/2+tx)/2, (ty+ty+sigVisualW)/2) = (tx-sigVisualH/2, ty+sigVisualW/2)
+          // We want this center at the same place as sigRaw center
+          const rawCenterX = sigRaw.x + sigRaw.width / 2;
+          const rawCenterY = sigRaw.y + sigRaw.height / 2;
+          const tx = rawCenterX + sigVisualH / 2;
+          const ty = rawCenterY - sigVisualW / 2;
+
+          for (const [ox, oy] of boldOffsets) {
+            targetPage.pushOperators(
+              pushGraphicsState(),
+              concatTransformationMatrix(0, 1, -1, 0, tx + ox, ty + oy),
+            );
+            targetPage.drawImage(embeddedImage, {
+              x: 0, y: 0, width: sigVisualW, height: sigVisualH,
+            });
+            targetPage.pushOperators(popGraphicsState());
+          }
+        } else {
+          // Non-rotated page: draw directly at raw coordinates
+          for (const [ox, oy] of boldOffsets) {
+            targetPage.drawImage(embeddedImage, {
+              x: sigRaw.x + ox,
+              y: sigRaw.y + oy,
+              width: sigRaw.width,
+              height: sigRaw.height,
+            });
+          }
+        }
 
         // Remove the signature field so it doesn't overlay our image
         form.removeField(field);
-        logger.info({ field: formFieldName, targetW, targetH }, "Embedded signature image on PDF");
+        logger.info({ field: formFieldName, sigVisualW, sigVisualH, rotation: pageRotation }, "Embedded signature image on PDF");
       }
     } catch (err) {
       logger.warn({ field: formFieldName, err }, "Failed to fill form field");
