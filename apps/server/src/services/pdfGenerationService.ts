@@ -48,20 +48,44 @@ function nativeFetchBuffer(url: string, timeoutMs = IMAGE_FETCH_TIMEOUT_MS): Pro
 }
 
 /**
+ * Resolve a hostname using an alternative DNS server (8.8.8.8) when the system DNS is blocked.
+ * Returns the first IP address, or null if resolution fails.
+ */
+function resolveViaAltDns(hostname: string): string | null {
+  try {
+    const result = spawnSync("dig", ["@8.8.8.8", hostname, "A", "+short", "+time=5"], { encoding: "utf8" });
+    const lines = (result.stdout || "").trim().split("\n").filter((l) => /^\d+\.\d+\.\d+\.\d+$/.test(l.trim()));
+    return lines[0]?.trim() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Fetch a URL using system curl (bypasses Node.js network sandbox restrictions).
- * Falls back to this when Node's DNS resolver is blocked for external domains.
+ * For S3 URLs, resolves the IP via an alternative DNS server to bypass system DNS restrictions.
  */
 function curlFetchBuffer(url: string, timeoutSecs = 12): { buf: Buffer; mime: string; status: number } | null {
   try {
-    const result = spawnSync("curl", [
-      "-s", "-L",
-      "--max-time", String(timeoutSecs),
+    const args: string[] = ["-s", "-L", "--max-time", String(timeoutSecs),
       "--write-out", "\n__STATUS__:%{http_code}__MIME__:%{content_type}",
-      "--output", "-",
-      url,
-    ], { maxBuffer: IMAGE_FETCH_MAX_BYTES + 4096 });
+      "--output", "-"];
+
+    // For S3 URLs, bypass system DNS using hardcoded IP from alternative resolver
+    const parsed = new URL(url);
+    if (/amazonaws\.com$/i.test(parsed.hostname)) {
+      const ip = resolveViaAltDns(parsed.hostname);
+      if (ip) {
+        const port = parsed.protocol === "https:" ? "443" : "80";
+        args.push("--resolve", `${parsed.hostname}:${port}:${ip}`);
+        logger.info({ hostname: parsed.hostname, ip }, "Using alt-DNS resolved IP for S3 URL");
+      }
+    }
+
+    args.push(url);
+    const result = spawnSync("curl", args, { maxBuffer: IMAGE_FETCH_MAX_BYTES + 4096 });
     if (result.status !== 0 || !result.stdout) return null;
-    // stdout = <image bytes>\n__STATUS__:200__MIME__:image/png
+
     const raw = result.stdout as Buffer;
     const trailer = "\n__STATUS__:";
     const trailerBuf = Buffer.from(trailer);
