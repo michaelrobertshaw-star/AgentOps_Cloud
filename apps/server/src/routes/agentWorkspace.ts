@@ -429,26 +429,13 @@ Return ONLY valid JSON, no markdown fences.`;
           const runRows = ((runResult as any).rows ?? runResult) as any[];
           runId = runRows[0].id;
 
-          // Execute synchronously
-          await executeWorkflowPipeline(runId!, tempWf, companyId, agentId, {});
+          // Fire and forget — don't await so the HTTP response returns immediately.
+          // The client polls GET /runs/:runId every 5s until status = completed.
+          executeWorkflowPipeline(runId!, tempWf, companyId, agentId, {})
+            .catch(err => console.error(`[TestStep] Background pipeline error for run ${runId}:`, err));
 
-          // Fetch the completed run
-          const completedResult = await db.execute(sql`
-            SELECT * FROM workspace_runs WHERE id = ${runId}
-          `);
-          const completedRows = ((completedResult as any).rows ?? completedResult) as any[];
-          const completedRun = completedRows[0];
-
-          res.json({
-            status: completedRun?.status ?? "unknown",
-            step_results: completedRun?.step_results ?? [],
-            output_data: completedRun?.output_data ?? null,
-            output_columns: completedRun?.output_columns ?? null,
-            rows_processed: completedRun?.rows_processed ?? 0,
-            duration_ms: completedRun?.duration_ms ?? null,
-            error: completedRun?.error ?? null,
-            run_id: runId,
-          });
+          // Return run_id immediately — client polls for result
+          res.json({ run_id: runId, status: "running", async: true });
         } finally {
           // NOTE: We do NOT delete the temp workflow here because
           // workspace_runs has ON DELETE CASCADE on workflow_id —

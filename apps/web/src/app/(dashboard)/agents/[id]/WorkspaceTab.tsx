@@ -701,6 +701,38 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
       });
       if (!res.ok) throw new Error(`Test failed (${res.status})`);
       const result = await res.json();
+
+      // Async run — poll until completed
+      if (result.async && result.run_id) {
+        setStepTestResults((prev) => ({
+          ...prev,
+          [stepId]: { loading: true, data: null, error: null, showRaw: false },
+        }));
+        const pollInterval = setInterval(async () => {
+          try {
+            const pollRes = await fetchWithTenant(`/api/agents/${agentId}/workspace/runs/${result.run_id}`, { method: "GET" });
+            if (!pollRes.ok) return;
+            const pollData = await pollRes.json();
+            const runStatus: string = pollData.status ?? "running";
+            const progress: string = pollData.step_results?.[0]?.message ?? "Running...";
+            if (runStatus === "completed" || runStatus === "error") {
+              clearInterval(pollInterval);
+              setStepTestResults((prev) => ({
+                ...prev,
+                [stepId]: { loading: false, data: pollData, error: pollData.error ?? null, showRaw: false },
+              }));
+            } else {
+              // Show live progress
+              setStepTestResults((prev) => ({
+                ...prev,
+                [stepId]: { loading: true, data: { _progress: progress }, error: null, showRaw: false },
+              }));
+            }
+          } catch { /* keep polling */ }
+        }, 5000);
+        return; // don't fall through to field probing yet
+      }
+
       setStepTestResults((prev) => ({
         ...prev,
         [stepId]: { loading: false, data: result, error: result.error ?? null, showRaw: false },
@@ -1931,9 +1963,14 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
                   {stepTestResults[step.id] && (
                     <div className="mt-3 border-t border-gray-200/60 pt-3">
                       {stepTestResults[step.id].loading ? (
-                        <div className="flex items-center gap-2 text-xs text-blue-600">
-                          <div className="animate-spin h-3 w-3 border-2 border-blue-500 border-t-transparent rounded-full" />
-                          Running pipeline up to this step...
+                        <div className="flex flex-col gap-1.5 text-xs text-blue-600">
+                          <div className="flex items-center gap-2">
+                            <div className="animate-spin h-3 w-3 border-2 border-blue-500 border-t-transparent rounded-full flex-shrink-0" />
+                            <span className="font-medium">
+                              {(stepTestResults[step.id].data as Record<string,unknown> | null)?._progress as string ?? "Running pipeline…"}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-gray-400 pl-5">Large date-range pulls take 3–5 min. Results appear automatically.</p>
                         </div>
                       ) : stepTestResults[step.id].error ? (
                         <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2">

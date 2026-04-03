@@ -237,7 +237,9 @@ export async function executeWorkflowPipeline(
               const dateTo = cfg.tool_params?.date_to ? new Date(cfg.tool_params.date_to as string + "T23:59:59Z") : null;
               const accountFilter = cfg.tool_params?.account as string | undefined;
               // min_distance: keep rows where distance OR actual_distance >= this value (miles)
+              // iCabbi API returns distances in METERS — convert miles to meters for comparison
               const minDistanceMiles = cfg.tool_params?.min_distance != null ? Number(cfg.tool_params.min_distance) : null;
+              const minDistanceMeters = minDistanceMiles !== null ? minDistanceMiles * 1609.34 : null;
               const ABSOLUTE_MAX = 50_000;
               const WALL_TIMEOUT_MS = 4 * 60 * 1000; // 4 minutes
               let pullSuccess = false;
@@ -349,10 +351,11 @@ export async function executeWorkflowPipeline(
                       if (!accountPattern.test(ref) && !accountPattern.test(name) && !accountPattern.test(identifier)) continue;
                     }
                     // Distance filter — keep rows where estimated OR actual distance >= threshold
-                    if (minDistanceMiles !== null) {
+                    // distances from iCabbi are in meters; minDistanceMeters converts from miles
+                    if (minDistanceMeters !== null) {
                       const dist = Number(flat["distance"] ?? 0);
                       const actualDist = Number(flat["actual_distance"] ?? 0);
-                      if (dist < minDistanceMiles && actualDist < minDistanceMiles) continue;
+                      if (dist < minDistanceMeters && actualDist < minDistanceMeters) continue;
                     }
                     allMatchedRows.push(flat);
                     keptCount++;
@@ -432,15 +435,15 @@ export async function executeWorkflowPipeline(
                       console.log(`[WorkspaceExec] Post-filter account "${accountFilter}": kept ${dataset.length}/${before}`);
                     }
                   }
-                  // Post-filter: distance threshold
-                  if (minDistanceMiles !== null && dataset.length > 0) {
+                  // Post-filter: distance threshold (iCabbi distances in meters)
+                  if (minDistanceMeters !== null && dataset.length > 0) {
                     const before = dataset.length;
                     dataset = dataset.filter(row => {
                       const dist = Number(row["distance"] ?? 0);
                       const actualDist = Number(row["actual_distance"] ?? 0);
-                      return dist >= minDistanceMiles! || actualDist >= minDistanceMiles!;
+                      return dist >= minDistanceMeters! || actualDist >= minDistanceMeters!;
                     });
-                    console.log(`[WorkspaceExec] Post-filter distance ≥${minDistanceMiles}mi: kept ${dataset.length}/${before}`);
+                    console.log(`[WorkspaceExec] Post-filter distance ≥${minDistanceMiles}mi (${Math.round(minDistanceMeters!)}m): kept ${dataset.length}/${before}`);
                   }
 
                   pullSuccess = true;
