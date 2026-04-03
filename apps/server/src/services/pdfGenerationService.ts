@@ -444,14 +444,20 @@ export async function fillPdfForm(
           }
           [x1, y1, x2, y2] = nums;
         }
-        // Use the PDF form field's own position and size directly
+        // Default: use the PDF AcroForm field's own rect for position + size
         const left = Math.min(x1, x2);
         const bottom = Math.min(y1, y2);
-        const posX = left;
-        const posY = bottom;
-        // Derive target size from the PDF rect (abs diff); fall back to sensible defaults
-        const targetW = Math.abs(x2 - x1) || 200;
-        const targetH = Math.abs(y2 - y1) || 50;
+        const fieldW = Math.abs(x2 - x1) || 200;
+        const fieldH = Math.abs(y2 - y1) || 50;
+        // Allow user-placed overrides (stored as __sig_x__/y__/w__/h__ in field_mappings)
+        const overrideX = fieldMappings[`__sig_x__${formFieldName}`];
+        const overrideY = fieldMappings[`__sig_y__${formFieldName}`];
+        const overrideW = fieldMappings[`__sig_w__${formFieldName}`];
+        const overrideH = fieldMappings[`__sig_h__${formFieldName}`];
+        const posX = overrideX !== undefined ? parseFloat(overrideX) : left;
+        const posY = overrideY !== undefined ? parseFloat(overrideY) : bottom;
+        const targetW = overrideW !== undefined ? parseFloat(overrideW) : fieldW;
+        const targetH = overrideH !== undefined ? parseFloat(overrideH) : fieldH;
 
         const pageRef = widget.P();
         const pages = doc.getPages();

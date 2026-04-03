@@ -338,7 +338,121 @@ export default function TemplateDesigner({
   }, [pdfPreviewUrl]);
 
   // pdf.js rendering into canvases — renders PDF as images we can overlay on
-  // (pdf.js canvas rendering removed — form_fill mode uses iframe which preserves radio button interactivity)
+  // ── pdf.js canvas — renders the PDF as images so we can capture clicks ──
+  const pdfWrapperRef = useRef<HTMLDivElement>(null);
+  const pdfCanvasContainerRef = useRef<HTMLDivElement>(null);
+  const [overlayScale, setOverlayScale] = useState(1);
+  const [pdfPageInfo, setPdfPageInfo] = useState<Array<{ width: number; height: number }>>([]);
+  const [pdfCanvasReady, setPdfCanvasReady] = useState(false);
+  const [pdfCanvasError, setPdfCanvasError] = useState(false);
+
+  // Which signature field is waiting for a click-to-place on the PDF
+  const [placingSignature, setPlacingSignature] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (mode !== "form_fill" || !pdfPreviewUrl) return;
+    let cancelled = false;
+    setPdfCanvasReady(false);
+    setPdfCanvasError(false);
+    setPlacingSignature(null);
+
+    async function renderPdfToCanvas() {
+      const CDN = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.3.136";
+      if (!(window as any).__pdfjsLib) {
+        await new Promise<void>((resolve, reject) => {
+          const s = document.createElement("script");
+          s.type = "module";
+          s.textContent = `import * as pdfjsLib from "${CDN}/pdf.min.mjs"; window.__pdfjsLib = pdfjsLib;`;
+          s.onerror = reject;
+          document.head.appendChild(s);
+          const check = setInterval(() => {
+            if ((window as any).__pdfjsLib) { clearInterval(check); resolve(); }
+          }, 50);
+          setTimeout(() => { clearInterval(check); reject(new Error("pdf.js load timeout")); }, 10000);
+        });
+      }
+      const pdfjsLib = (window as any).__pdfjsLib;
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `${CDN}/pdf.worker.min.mjs`;
+
+      const resp = await fetch(pdfPreviewUrl!);
+      const buf = await resp.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise;
+      const container = pdfCanvasContainerRef.current;
+      if (!container || cancelled) return;
+
+      const wrapperW = pdfWrapperRef.current?.clientWidth ?? 800;
+      while (container.firstChild) container.removeChild(container.firstChild);
+      const dims: Array<{ width: number; height: number }> = [];
+
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const vp0 = page.getViewport({ scale: 1 });
+        const scale = wrapperW / vp0.width;
+        const vp = page.getViewport({ scale });
+        if (i === 1 && !cancelled) setOverlayScale(scale);
+        dims.push({ width: vp0.width, height: vp0.height });
+
+        const canvas = document.createElement("canvas");
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = Math.floor(vp.width * dpr);
+        canvas.height = Math.floor(vp.height * dpr);
+        canvas.style.width = `${vp.width}px`;
+        canvas.style.height = `${vp.height}px`;
+        canvas.style.display = "block";
+        const ctx = canvas.getContext("2d")!;
+        ctx.scale(dpr, dpr);
+        container.appendChild(canvas);
+        if (cancelled) return;
+        await page.render({ canvasContext: ctx, viewport: vp }).promise;
+      }
+      if (!cancelled) { setPdfPageInfo(dims); setPdfCanvasReady(true); }
+    }
+
+    renderPdfToCanvas().catch((err) => {
+      console.error("PDF canvas render failed:", err);
+      if (!cancelled) setPdfCanvasError(true);
+    });
+    return () => { cancelled = true; };
+  }, [pdfPreviewUrl, mode]);
+
+  /** Convert a click on the canvas container to PDF points */
+  function handlePdfCanvasClick(e: React.MouseEvent<HTMLDivElement>) {
+    if (!placingSignature || !pdfCanvasReady) return;
+    const container = pdfCanvasContainerRef.current;
+    if (!container) return;
+
+    const rect = container.getBoundingClientRect();
+    const pixelX = e.clientX - rect.left;
+    const pixelY = e.clientY - rect.top;
+
+    // Determine which page was clicked
+    let cumH = 0, pageIdx = 0, yInPage = pixelY;
+    for (let i = 0; i < pdfPageInfo.length; i++) {
+      const ph = pdfPageInfo[i].height * overlayScale;
+      if (pixelY < cumH + ph) { pageIdx = i; yInPage = pixelY - cumH; break; }
+      cumH += ph;
+    }
+    const page = pdfPageInfo[pageIdx] ?? pdfPageInfo[0];
+    if (!page) return;
+
+    // PDF coordinates: x left-to-right, y bottom-to-top
+    const pdfX = Math.round(pixelX / overlayScale);
+    const pdfY = Math.round(page.height - yInPage / overlayScale);
+
+    // Use the signature field's own size (from AcroForm rect) as default
+    const sigField = formFields.find((f) => f.name === placingSignature && f.type === "signature");
+    const w = Math.round(sigField?.rect?.width ?? 200);
+    const h = Math.round(sigField?.rect?.height ?? 50);
+
+    setFieldMappings((prev) => ({
+      ...prev,
+      [`__sig_x__${placingSignature}`]: String(pdfX),
+      [`__sig_y__${placingSignature}`]: String(pdfY),
+      [`__sig_w__${placingSignature}`]: String(w),
+      [`__sig_h__${placingSignature}`]: String(h),
+    }));
+    setPlacingSignature(null);
+  }
 
   function extractFieldNames(schema: unknown): string[] {
     if (!Array.isArray(schema)) return [];
@@ -709,19 +823,71 @@ export default function TemplateDesigner({
                 <div className="animate-spin h-8 w-8 border-3 border-green-500 border-t-transparent rounded-full" />
               </div>
             ) : mode === "form_fill" ? (
-              /* Form fill mode: interactive iframe (preserves radio buttons, checkboxes) */
-              <div className="flex-1 w-full overflow-auto bg-gray-100" style={{ minHeight: 0 }}>
+              /* Form fill mode: pdf.js canvas so we can capture clicks for placement */
+              <div ref={pdfWrapperRef} className="flex-1 w-full overflow-auto bg-gray-100 relative" style={{ minHeight: 0 }}>
                 {pdfPreviewUrl ? (
-                  <iframe
-                    src={pdfPreviewUrl}
-                    className="w-full border-0"
-                    style={{ height: "calc(90vh - 120px)" }}
-                    title="PDF Preview"
-                  />
+                  <>
+                    {/* Placement mode banner */}
+                    {placingSignature && (
+                      <div className="sticky top-0 z-30 flex items-center justify-between px-4 py-2.5 bg-pink-600 text-white text-sm font-medium shadow-md">
+                        <span>🎯 Click anywhere on the PDF to place <strong>{placingSignature}</strong></span>
+                        <button onClick={() => setPlacingSignature(null)} className="text-pink-200 hover:text-white text-xs underline">Cancel</button>
+                      </div>
+                    )}
+
+                    {/* Canvas container — clickable when in placement mode */}
+                    <div
+                      className="relative"
+                      style={{ cursor: placingSignature ? "crosshair" : "default" }}
+                      onClick={handlePdfCanvasClick}
+                    >
+                      {pdfCanvasError ? (
+                        <iframe src={pdfPreviewUrl} className="w-full border-0" style={{ height: "calc(90vh - 120px)" }} title="PDF Preview" />
+                      ) : (
+                        <div ref={pdfCanvasContainerRef} />
+                      )}
+
+                      {!pdfCanvasReady && !pdfCanvasError && (
+                        <div className="flex items-center justify-center py-20">
+                          <div className="animate-spin h-8 w-8 border-3 border-green-500 border-t-transparent rounded-full" />
+                        </div>
+                      )}
+
+                      {/* Placed signature indicators — pink boxes showing where each signature will land */}
+                      {pdfCanvasReady && !pdfCanvasError && pdfPageInfo.length > 0 &&
+                        formFields.filter((ff) => ff.type === "signature" && fieldMappings[ff.name]).map((ff) => {
+                          const px = fieldMappings[`__sig_x__${ff.name}`];
+                          const py = fieldMappings[`__sig_y__${ff.name}`];
+                          const pw = fieldMappings[`__sig_w__${ff.name}`];
+                          const ph = fieldMappings[`__sig_h__${ff.name}`];
+                          // Only show indicator if position was manually placed
+                          if (!px || !py) return null;
+                          const x = parseFloat(px);
+                          const y = parseFloat(py);
+                          const w = parseFloat(pw ?? "200");
+                          const h = parseFloat(ph ?? "50");
+                          // We don't track per-placement page yet — assume page 0
+                          const page = pdfPageInfo[0];
+                          if (!page) return null;
+                          const screenX = x * overlayScale;
+                          const screenY = (page.height - y - h) * overlayScale;
+                          const screenW = w * overlayScale;
+                          const screenH = h * overlayScale;
+                          return (
+                            <div
+                              key={ff.name}
+                              style={{ position: "absolute", left: screenX, top: screenY, width: screenW, height: screenH, pointerEvents: "none" }}
+                              className="border-2 border-pink-500 bg-pink-200/30 rounded"
+                            >
+                              <span className="absolute -top-4 left-0 text-[9px] text-pink-600 font-bold bg-white px-1 rounded whitespace-nowrap">{ff.name}</span>
+                            </div>
+                          );
+                        })
+                      }
+                    </div>
+                  </>
                 ) : (
-                  <div className="flex-1 flex items-center justify-center text-gray-400 py-20">
-                    Loading PDF preview...
-                  </div>
+                  <div className="flex items-center justify-center py-20 text-gray-400">Loading PDF preview...</div>
                 )}
               </div>
             ) : (
@@ -863,7 +1029,26 @@ export default function TemplateDesigner({
                             })}
                           </div>
                           {isMappedToColumn && (
-                            <p className="text-[9px] text-pink-600 font-medium">✓ Mapped to: <span className="font-mono">{mapped}</span> — tap again to remove</p>
+                            <>
+                              <p className="text-[9px] text-pink-600 font-medium">✓ Mapped to: <span className="font-mono">{mapped}</span></p>
+                              {/* Place on PDF button */}
+                              <button
+                                onClick={() => setPlacingSignature((p) => p === ff.name ? null : ff.name)}
+                                className={`w-full mt-1 py-2 rounded-lg text-xs font-semibold border-2 transition-all ${
+                                  placingSignature === ff.name
+                                    ? "bg-pink-600 border-pink-600 text-white animate-pulse"
+                                    : fieldMappings[`__sig_x__${ff.name}`]
+                                    ? "bg-green-50 border-green-400 text-green-700 hover:bg-green-100"
+                                    : "bg-pink-50 border-pink-400 text-pink-700 hover:bg-pink-100"
+                                }`}
+                              >
+                                {placingSignature === ff.name
+                                  ? "🎯 Click on the PDF now…"
+                                  : fieldMappings[`__sig_x__${ff.name}`]
+                                  ? "✅ Placed — click to reposition"
+                                  : "📍 Click to place on PDF"}
+                              </button>
+                            </>
                           )}
                         </div>
                       ) : ff.type === "checkbox" ? (
