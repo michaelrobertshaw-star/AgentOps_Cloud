@@ -23,6 +23,7 @@ import { Router } from "express";
 import { sql, type SQL } from "drizzle-orm";
 import { authenticate } from "../middleware/auth.js";
 import { getDb } from "../lib/db.js";
+import https from "https";
 
 // ================================================================
 // Agent-scoped workspace routes
@@ -1259,10 +1260,9 @@ export function agentWorkspaceTemplateRoutes() {
         const sigUrl = String(sigRow["payment.signature"]);
         // Use native https (undici/fetch is blocked in this environment)
         const { buf: bodyBuf, mime: contentType, status: fetchStatus } = await new Promise<{ buf: Buffer; mime: string; status: number }>((resolve, reject) => {
-          const https = require("https");
-          const req = https.get(sigUrl, (res: any) => {
+          const req = https.get(sigUrl, (res) => {
             const chunks: Buffer[] = [];
-            res.on("data", (c: any) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
+            res.on("data", (c: Buffer | string) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
             res.on("end", () => resolve({ buf: Buffer.concat(chunks), mime: res.headers["content-type"] || "image/png", status: res.statusCode ?? 0 }));
             res.on("error", reject);
           });
