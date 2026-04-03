@@ -545,10 +545,53 @@ export async function generateBatchFormFillPdfs(
   filenamePattern: string = "{trip_id}-{name}.pdf",
 ): Promise<Array<{ filename: string; s3Key: string; rowIndex: number }>> {
   const pdfBuffer = await loadPdfBuffer(basePdfKey);
+
+  // Pre-fetch all image URLs to base64 before the PDF generation loop.
+  // nativeFetchBuffer uses Node's built-in https module (not undici/fetch which can be blocked).
+  const urlCache = new Map<string, string>();
+  const imgColumns = new Set<string>();
+  for (const [k, v] of Object.entries(fieldMappings)) {
+    if (!k.startsWith("__sig_") && v && dataset.some((r) => typeof r[v] === "string" && String(r[v]).startsWith("http"))) {
+      imgColumns.add(v);
+    }
+  }
+  if (imgColumns.size > 0) {
+    logger.info({ columns: [...imgColumns] }, "Pre-fetching image URLs before PDF generation");
+    const allUrls = [...new Set(
+      [...imgColumns].flatMap((col) => dataset.map((r) => r[col]).filter((u): u is string => typeof u === "string" && u.startsWith("http")))
+    )];
+    await Promise.all(allUrls.map(async (url) => {
+      try {
+        const { buf, mime, status } = await nativeFetchBuffer(url);
+        if (status >= 200 && status < 300 && buf.length > 0) {
+          urlCache.set(url, `data:${mime};base64,${buf.toString("base64")}`);
+          logger.info({ mime, bytes: buf.length }, "Pre-fetched signature image");
+        } else {
+          logger.error({ status, url: url.slice(0, 80) }, "Bad HTTP status pre-fetching image");
+        }
+      } catch (err) {
+        logger.error({ err: String(err), url: url.slice(0, 80) }, "Failed to pre-fetch image");
+      }
+    }));
+    logger.info({ fetched: urlCache.size, total: allUrls.length }, "Image pre-fetch complete");
+  }
+
+  // Replace URL values with pre-fetched base64 in the working dataset copy
+  const resolvedDataset = urlCache.size > 0
+    ? dataset.map((row) => {
+        const r = { ...row };
+        for (const col of imgColumns) {
+          const val = r[col];
+          if (typeof val === "string" && urlCache.has(val)) r[col] = urlCache.get(val)!;
+        }
+        return r;
+      })
+    : dataset;
+
   const results: Array<{ filename: string; s3Key: string; rowIndex: number }> = [];
 
-  for (let i = 0; i < dataset.length; i++) {
-    const row = dataset[i];
+  for (let i = 0; i < resolvedDataset.length; i++) {
+    const row = resolvedDataset[i];
 
     try {
       const filledPdf = await fillPdfForm(pdfBuffer, row, fieldMappings);

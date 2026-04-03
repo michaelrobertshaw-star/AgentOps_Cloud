@@ -1238,7 +1238,7 @@ export function agentWorkspaceTemplateRoutes() {
     },
   );
 
-  // Debug: test PDF fill with a specific run row to diagnose signature embedding
+  // Debug: test PDF fill with a specific run row to diagnose signature embedding (v2 - native https)
   router.get(
     "/debug/pdf-sig-test/:runId",
     authenticate(),
