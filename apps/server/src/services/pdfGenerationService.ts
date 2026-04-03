@@ -12,6 +12,8 @@ import { PDFDocument, PDFName, PDFArray } from "pdf-lib";
 import { downloadWorkspaceFile, uploadWorkspaceFile } from "./storageService.js";
 import pino from "pino";
 import path from "path";
+import https from "https";
+import http from "http";
 
 const logger = pino({ name: "pdf-generation" });
 
@@ -21,6 +23,29 @@ const plugins = { text, image, ...barcodes };
 /** Max image fetch size (5 MB) and timeout (10s) */
 const IMAGE_FETCH_MAX_BYTES = 5 * 1024 * 1024;
 const IMAGE_FETCH_TIMEOUT_MS = 10_000;
+
+/**
+ * Fetch a URL using Node's native https/http module (bypasses undici/fetch which is blocked in some environments).
+ */
+function nativeFetchBuffer(url: string, timeoutMs = IMAGE_FETCH_TIMEOUT_MS): Promise<{ buf: Buffer; mime: string; status: number }> {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const lib = parsed.protocol === "https:" ? https : http;
+    const req = lib.get(url, (res) => {
+      if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        // Follow one redirect
+        nativeFetchBuffer(res.headers.location, timeoutMs).then(resolve).catch(reject);
+        return;
+      }
+      const chunks: Buffer[] = [];
+      res.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+      res.on("end", () => resolve({ buf: Buffer.concat(chunks), mime: res.headers["content-type"] || "image/png", status: res.statusCode ?? 0 }));
+      res.on("error", reject);
+    });
+    req.setTimeout(timeoutMs, () => { req.destroy(); reject(new Error("Request timed out")); });
+    req.on("error", reject);
+  });
+}
 
 /**
  * Check if a URL targets a private/reserved IP range (SSRF protection).
@@ -69,21 +94,15 @@ async function resolveImageValue(val: unknown): Promise<string> {
       return "";
     }
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), IMAGE_FETCH_TIMEOUT_MS);
-      const res = await fetch(str, { signal: controller.signal });
-      clearTimeout(timer);
-      const contentLength = res.headers.get("content-length");
-      if (contentLength && parseInt(contentLength, 10) > IMAGE_FETCH_MAX_BYTES) {
-        logger.warn({ url: str, size: contentLength }, "Image too large for PDF field");
+      const { buf, mime, status } = await nativeFetchBuffer(str);
+      if (status < 200 || status >= 300) {
+        logger.warn({ url: str, status }, "Non-200 response fetching image URL for PDF field");
         return "";
       }
-      const buf = Buffer.from(await res.arrayBuffer());
       if (buf.length > IMAGE_FETCH_MAX_BYTES) {
         logger.warn({ url: str, size: buf.length }, "Image response exceeded size limit");
         return "";
       }
-      const mime = res.headers.get("content-type") || "image/jpeg";
       return `data:${mime};base64,${buf.toString("base64")}`;
     } catch (err) {
       logger.warn({ url: str, err }, "Failed to fetch image URL for PDF field");
@@ -347,18 +366,13 @@ async function resolveImageBuffer(val: string): Promise<{ buf: Buffer; mime: str
   if (/^https?:\/\//i.test(str)) {
     if (isPrivateUrl(str)) return null;
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), IMAGE_FETCH_TIMEOUT_MS);
-      const res = await fetch(str, { signal: controller.signal });
-      clearTimeout(timer);
-      if (!res.ok) {
-        console.error(`[resolveImageBuffer] HTTP ${res.status} fetching image URL: ${str.slice(0, 80)}...`);
+      const { buf, mime, status } = await nativeFetchBuffer(str);
+      if (status < 200 || status >= 300) {
+        console.error(`[resolveImageBuffer] HTTP ${status} fetching image URL: ${str.slice(0, 80)}...`);
         return null;
       }
-      const buf = Buffer.from(await res.arrayBuffer());
       if (buf.length > IMAGE_FETCH_MAX_BYTES) return null;
-      const mime = res.headers.get("content-type") || "image/jpeg";
-      console.log(`[resolveImageBuffer] Fetched image: ${mime}, ${buf.length} bytes`);
+      console.log(`[resolveImageBuffer] Fetched image via native https: ${mime}, ${buf.length} bytes`);
       return { buf, mime };
     } catch (err) {
       console.error(`[resolveImageBuffer] Failed to fetch image URL: ${err}`);

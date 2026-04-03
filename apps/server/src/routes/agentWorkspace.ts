@@ -1257,10 +1257,19 @@ export function agentWorkspaceTemplateRoutes() {
         if (!sigRow) { res.json({ ok: false, error: "no row with payment.signature in this run" }); return; }
 
         const sigUrl = String(sigRow["payment.signature"]);
-        const fetchRes = await fetch(sigUrl, { signal: AbortSignal.timeout(10000) });
-        const fetchOk = fetchRes.ok;
-        const contentType = fetchRes.headers.get("content-type");
-        const bodyBuf = fetchOk ? Buffer.from(await fetchRes.arrayBuffer()) : null;
+        // Use native https (undici/fetch is blocked in this environment)
+        const { buf: bodyBuf, mime: contentType, status: fetchStatus } = await new Promise<{ buf: Buffer; mime: string; status: number }>((resolve, reject) => {
+          const https = require("https");
+          const req = https.get(sigUrl, (res: any) => {
+            const chunks: Buffer[] = [];
+            res.on("data", (c: any) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
+            res.on("end", () => resolve({ buf: Buffer.concat(chunks), mime: res.headers["content-type"] || "image/png", status: res.statusCode ?? 0 }));
+            res.on("error", reject);
+          });
+          req.setTimeout(10000, () => { req.destroy(); reject(new Error("timeout")); });
+          req.on("error", reject);
+        });
+        const fetchOk = fetchStatus >= 200 && fetchStatus < 300;
 
         const tmplResult = await db.execute(sql`SELECT base_pdf_key, field_mappings FROM workspace_templates WHERE id = '26237577-729b-4000-9810-7cbe77d7b048' AND company_id = ${companyId} LIMIT 1`);
         const tmplRows = ((tmplResult as any).rows ?? tmplResult) as any[];
@@ -1272,7 +1281,7 @@ export function agentWorkspaceTemplateRoutes() {
         const filledPdf = await fillPdfForm(pdfBuf, sigRow, fieldMappings);
 
         res.json({
-          fetchStatus: fetchRes.status,
+          fetchStatus,
           fetchOk,
           contentType,
           imageSizeBytes: bodyBuf?.length ?? 0,

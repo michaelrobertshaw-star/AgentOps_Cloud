@@ -593,17 +593,26 @@ export async function executeWorkflowPipeline(
                     console.log(`[WorkspaceExec] Pre-fetching ${urls.length} image URLs for column "${col}"`);
                     await Promise.all(urls.map(async (url) => {
                       try {
-                        const controller = new AbortController();
-                        const timer = setTimeout(() => controller.abort(), 12000);
-                        const res = await fetch(url, { signal: controller.signal });
-                        clearTimeout(timer);
-                        if (res.ok) {
-                          const buf = Buffer.from(await res.arrayBuffer());
-                          const mime = res.headers.get("content-type") || "image/png";
+                        // Use native https.get to avoid undici/fetch network restrictions
+                        const { buf, mime, status } = await new Promise<{ buf: Buffer; mime: string; status: number }>((resolve, reject) => {
+                          const https = require("https");
+                          const http = require("http");
+                          const parsed = new URL(url);
+                          const lib = parsed.protocol === "https:" ? https : http;
+                          const req = lib.get(url, (res: any) => {
+                            const chunks: Buffer[] = [];
+                            res.on("data", (c: any) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
+                            res.on("end", () => resolve({ buf: Buffer.concat(chunks), mime: res.headers["content-type"] || "image/png", status: res.statusCode ?? 0 }));
+                            res.on("error", reject);
+                          });
+                          req.setTimeout(12000, () => { req.destroy(); reject(new Error("timeout")); });
+                          req.on("error", reject);
+                        });
+                        if (status >= 200 && status < 300 && buf.length > 0) {
                           urlCache.set(url, `data:${mime};base64,${buf.toString("base64")}`);
-                          console.log(`[WorkspaceExec] Pre-fetched image: ${mime}, ${buf.length} bytes`);
+                          console.log(`[WorkspaceExec] Pre-fetched image: ${mime}, ${buf.length} bytes, status ${status}`);
                         } else {
-                          console.error(`[WorkspaceExec] Failed to pre-fetch image (HTTP ${res.status}): ${url.slice(0, 80)}`);
+                          console.error(`[WorkspaceExec] Failed to pre-fetch image (HTTP ${status}): ${url.slice(0, 80)}`);
                         }
                       } catch (err) {
                         console.error(`[WorkspaceExec] Error pre-fetching image: ${err}. URL: ${url.slice(0, 80)}`);
