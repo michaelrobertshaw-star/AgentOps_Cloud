@@ -1211,6 +1211,89 @@ export function agentWorkspaceTemplateRoutes() {
     },
   );
 
+  // POST /api/workspace/runs/:runId/download-zip — download all PDFs from a run as a ZIP (with custom naming)
+  router.post(
+    "/runs/:runId/download-zip",
+    authenticate(),
+    async (req, res, next) => {
+      try {
+        const db = getDb();
+        const companyId = req.companyId!;
+        const { runId } = req.params;
+        const { pattern } = req.body as { pattern?: string };
+
+        // Load run from DB
+        const runResult = await db.execute(sql`SELECT * FROM workspace_runs WHERE id = ${runId} AND company_id = ${companyId}`);
+        const runRows = ((runResult as any).rows ?? runResult) as any[];
+        if (!runRows.length) { res.status(404).json({ error: "Run not found" }); return; }
+        const run = runRows[0];
+
+        const outputData = (run.output_data ?? []) as Record<string, unknown>[];
+        const pdfRows = outputData.filter((r) => r._pdf_file && r._pdf_key);
+        if (!pdfRows.length) { res.status(404).json({ error: "No PDF files in this run" }); return; }
+
+        const pathMod = await import("path");
+        const { existsSync: fsExistsSync, readFileSync: fsReadFileSync, mkdtempSync, copyFileSync, rmSync } = await import("fs");
+        const { execSync } = await import("child_process");
+        const os = await import("os");
+        const srcDir = pathMod.resolve(process.cwd(), "uploads/runs", companyId, runId);
+
+        // Apply pattern to each row to get target filename
+        const applyPattern = (tmpl: string, row: Record<string, unknown>): string => {
+          let fn = tmpl || "{_pdf_file}";
+          fn = fn.replace(/\{(\w+)\}/g, (_m, key) => {
+            const val = String(row[key] ?? "").replace(/[/\\:*?"<>|]/g, "_").slice(0, 80);
+            return val || "unknown";
+          });
+          return fn;
+        };
+
+        const tmpDir = mkdtempSync(pathMod.join(os.tmpdir(), "agentops-zip-"));
+        const usedNames = new Set<string>();
+
+        try {
+          for (const row of pdfRows) {
+            const srcName = String(row._pdf_file);
+            const srcPath = pathMod.join(srcDir, srcName);
+            if (!fsExistsSync(srcPath)) continue;
+
+            let destName = applyPattern(pattern || "{_pdf_file}", row);
+            // Ensure .pdf extension
+            if (!destName.toLowerCase().endsWith(".pdf")) destName += ".pdf";
+            // Deduplicate
+            if (usedNames.has(destName)) {
+              const base = destName.slice(0, -4);
+              let i = 2;
+              while (usedNames.has(`${base}_${i}.pdf`)) i++;
+              destName = `${base}_${i}.pdf`;
+            }
+            usedNames.add(destName);
+            copyFileSync(srcPath, pathMod.join(tmpDir, destName));
+          }
+
+          // Zip it
+          const zipPath = pathMod.join(os.tmpdir(), `agentops-${runId}.zip`);
+          execSync(`cd "${tmpDir}" && zip -j "${zipPath}" *`, { stdio: "pipe" });
+
+          res.setHeader("Content-Type", "application/zip");
+          res.setHeader("Content-Disposition", `attachment; filename="SS-Oct25-PDFs.zip"`);
+          res.send(fsReadFileSync(zipPath));
+
+          // Cleanup async
+          setImmediate(() => {
+            try { rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+            try { rmSync(zipPath, { force: true }); } catch {}
+          });
+        } catch (innerErr) {
+          try { rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+          throw innerErr;
+        }
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
   // DELETE /api/workspace/templates/:id
   router.delete(
     "/templates/:id",

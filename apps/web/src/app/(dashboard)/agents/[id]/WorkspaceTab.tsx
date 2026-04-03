@@ -1973,6 +1973,40 @@ export default function WorkspaceTab({ agentId }: { agentId: string }) {
                           </button>
                         );
                       })()}
+
+                      {/* Download ZIP button — only for SAVE steps with PDF format and a completed run that has PDFs */}
+                      {step.type === "save" && (step.config.format as string || "pdf") === "pdf" && currentRun?.id && (() => {
+                        const hasPdfFiles = currentRun.output_data?.some((r: Record<string, unknown>) => r._pdf_file);
+                        if (!hasPdfFiles) return null;
+                        return (
+                          <button
+                            onClick={async () => {
+                              try {
+                                const pattern = (step.config.filename_pattern as string) || "";
+                                const res = await fetchWithTenant(`/api/agents/${agentId}/workspace/runs/${currentRun.id}/download-zip`, {
+                                  method: "POST",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ pattern }),
+                                });
+                                if (!res.ok) { alert(`Download failed: ${res.status}`); return; }
+                                const blob = await res.blob();
+                                const url = URL.createObjectURL(blob);
+                                const a = document.createElement("a");
+                                a.href = url;
+                                a.download = "SS-Oct25-PDFs.zip";
+                                a.click();
+                                setTimeout(() => URL.revokeObjectURL(url), 5000);
+                              } catch (e) {
+                                alert(`Download error: ${e}`);
+                              }
+                            }}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-green-100 hover:bg-green-200 text-green-700 text-xs font-medium rounded-lg border border-green-300"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                            Download {currentRun.output_data?.filter((r: Record<string, unknown>) => r._pdf_file).length ?? 0} PDFs as ZIP
+                          </button>
+                        );
+                      })()}
                     </div>
                   )}
 
