@@ -14,6 +14,7 @@ import pino from "pino";
 import path from "path";
 import https from "https";
 import http from "http";
+import { spawnSync } from "child_process";
 
 const logger = pino({ name: "pdf-generation" });
 
@@ -25,7 +26,7 @@ const IMAGE_FETCH_MAX_BYTES = 5 * 1024 * 1024;
 const IMAGE_FETCH_TIMEOUT_MS = 10_000;
 
 /**
- * Fetch a URL using Node's native https/http module (bypasses undici/fetch which is blocked in some environments).
+ * Fetch a URL using Node's native https/http module.
  */
 function nativeFetchBuffer(url: string, timeoutMs = IMAGE_FETCH_TIMEOUT_MS): Promise<{ buf: Buffer; mime: string; status: number }> {
   return new Promise((resolve, reject) => {
@@ -33,7 +34,6 @@ function nativeFetchBuffer(url: string, timeoutMs = IMAGE_FETCH_TIMEOUT_MS): Pro
     const lib = parsed.protocol === "https:" ? https : http;
     const req = lib.get(url, (res) => {
       if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        // Follow one redirect
         nativeFetchBuffer(res.headers.location, timeoutMs).then(resolve).catch(reject);
         return;
       }
@@ -45,6 +45,63 @@ function nativeFetchBuffer(url: string, timeoutMs = IMAGE_FETCH_TIMEOUT_MS): Pro
     req.setTimeout(timeoutMs, () => { req.destroy(); reject(new Error("Request timed out")); });
     req.on("error", reject);
   });
+}
+
+/**
+ * Fetch a URL using system curl (bypasses Node.js network sandbox restrictions).
+ * Falls back to this when Node's DNS resolver is blocked for external domains.
+ */
+function curlFetchBuffer(url: string, timeoutSecs = 12): { buf: Buffer; mime: string; status: number } | null {
+  try {
+    const result = spawnSync("curl", [
+      "-s", "-L",
+      "--max-time", String(timeoutSecs),
+      "--write-out", "\n__STATUS__:%{http_code}__MIME__:%{content_type}",
+      "--output", "-",
+      url,
+    ], { maxBuffer: IMAGE_FETCH_MAX_BYTES + 4096 });
+    if (result.status !== 0 || !result.stdout) return null;
+    // stdout = <image bytes>\n__STATUS__:200__MIME__:image/png
+    const raw = result.stdout as Buffer;
+    const trailer = "\n__STATUS__:";
+    const trailerBuf = Buffer.from(trailer);
+    const trailerIdx = raw.lastIndexOf(trailerBuf);
+    if (trailerIdx < 0) return null;
+    const imageBuf = raw.subarray(0, trailerIdx);
+    const meta = raw.subarray(trailerIdx + trailerBuf.length).toString();
+    const statusMatch = meta.match(/^(\d+)__MIME__:(.*)$/);
+    if (!statusMatch) return null;
+    const status = parseInt(statusMatch[1], 10);
+    const mime = statusMatch[2].split(";")[0].trim() || "image/png";
+    logger.info({ url: url.slice(0, 80), status, mime, bytes: imageBuf.length }, "curlFetchBuffer success");
+    return { buf: imageBuf, mime, status };
+  } catch (err) {
+    logger.error({ err }, "curlFetchBuffer error");
+    return null;
+  }
+}
+
+/**
+ * Fetch image using best available method: try native https first, then fall back to curl.
+ * Exported so the debug endpoint can use it directly.
+ */
+export async function fetchImageBuffer(url: string): Promise<{ buf: Buffer; mime: string } | null> {
+  // Try native https first
+  try {
+    const result = await nativeFetchBuffer(url);
+    if (result.status >= 200 && result.status < 300 && result.buf.length > 0) {
+      return { buf: result.buf, mime: result.mime };
+    }
+    logger.warn({ status: result.status }, "nativeFetchBuffer non-200, trying curl");
+  } catch (err) {
+    logger.warn({ err: String(err) }, "nativeFetchBuffer failed, trying curl");
+  }
+  // Fallback: use system curl (bypasses Node.js DNS sandbox)
+  const curlResult = curlFetchBuffer(url);
+  if (curlResult && curlResult.status >= 200 && curlResult.status < 300 && curlResult.buf.length > 0) {
+    return { buf: curlResult.buf, mime: curlResult.mime };
+  }
+  return null;
 }
 
 /**
@@ -93,21 +150,16 @@ async function resolveImageValue(val: unknown): Promise<string> {
       logger.warn({ url: str }, "Blocked private/internal URL in PDF image field (SSRF protection)");
       return "";
     }
-    try {
-      const { buf, mime, status } = await nativeFetchBuffer(str);
-      if (status < 200 || status >= 300) {
-        logger.warn({ url: str, status }, "Non-200 response fetching image URL for PDF field");
-        return "";
-      }
-      if (buf.length > IMAGE_FETCH_MAX_BYTES) {
-        logger.warn({ url: str, size: buf.length }, "Image response exceeded size limit");
-        return "";
-      }
-      return `data:${mime};base64,${buf.toString("base64")}`;
-    } catch (err) {
-      logger.warn({ url: str, err }, "Failed to fetch image URL for PDF field");
+    const result = await fetchImageBuffer(str);
+    if (!result) {
+      logger.warn({ url: str }, "Failed to fetch image URL for PDF field (all methods failed)");
       return "";
     }
+    if (result.buf.length > IMAGE_FETCH_MAX_BYTES) {
+      logger.warn({ url: str, size: result.buf.length }, "Image response exceeded size limit");
+      return "";
+    }
+    return `data:${result.mime};base64,${result.buf.toString("base64")}`;
   }
   // Assume raw base64
   return `data:image/jpeg;base64,${str}`;
@@ -365,19 +417,13 @@ async function resolveImageBuffer(val: string): Promise<{ buf: Buffer; mime: str
 
   if (/^https?:\/\//i.test(str)) {
     if (isPrivateUrl(str)) return null;
-    try {
-      const { buf, mime, status } = await nativeFetchBuffer(str);
-      if (status < 200 || status >= 300) {
-        console.error(`[resolveImageBuffer] HTTP ${status} fetching image URL: ${str.slice(0, 80)}...`);
-        return null;
-      }
-      if (buf.length > IMAGE_FETCH_MAX_BYTES) return null;
-      console.log(`[resolveImageBuffer] Fetched image via native https: ${mime}, ${buf.length} bytes`);
-      return { buf, mime };
-    } catch (err) {
-      console.error(`[resolveImageBuffer] Failed to fetch image URL: ${err}`);
+    const result = await fetchImageBuffer(str);
+    if (!result) {
+      console.error(`[resolveImageBuffer] All fetch methods failed for: ${str.slice(0, 80)}...`);
       return null;
     }
+    if (result.buf.length > IMAGE_FETCH_MAX_BYTES) return null;
+    return result;
   }
 
   // Assume raw base64
@@ -561,16 +607,11 @@ export async function generateBatchFormFillPdfs(
       [...imgColumns].flatMap((col) => dataset.map((r) => r[col]).filter((u): u is string => typeof u === "string" && u.startsWith("http")))
     )];
     await Promise.all(allUrls.map(async (url) => {
-      try {
-        const { buf, mime, status } = await nativeFetchBuffer(url);
-        if (status >= 200 && status < 300 && buf.length > 0) {
-          urlCache.set(url, `data:${mime};base64,${buf.toString("base64")}`);
-          logger.info({ mime, bytes: buf.length }, "Pre-fetched signature image");
-        } else {
-          logger.error({ status, url: url.slice(0, 80) }, "Bad HTTP status pre-fetching image");
-        }
-      } catch (err) {
-        logger.error({ err: String(err), url: url.slice(0, 80) }, "Failed to pre-fetch image");
+      const result = await fetchImageBuffer(url);
+      if (result) {
+        urlCache.set(url, `data:${result.mime};base64,${result.buf.toString("base64")}`);
+      } else {
+        logger.error({ url: url.slice(0, 80) }, "Failed to pre-fetch signature image (all methods failed)");
       }
     }));
     logger.info({ fetched: urlCache.size, total: allUrls.length }, "Image pre-fetch complete");

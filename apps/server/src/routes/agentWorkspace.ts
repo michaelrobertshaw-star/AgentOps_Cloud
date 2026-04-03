@@ -23,7 +23,6 @@ import { Router } from "express";
 import { sql, type SQL } from "drizzle-orm";
 import { authenticate } from "../middleware/auth.js";
 import { getDb } from "../lib/db.js";
-import https from "https";
 
 // ================================================================
 // Agent-scoped workspace routes
@@ -1239,7 +1238,7 @@ export function agentWorkspaceTemplateRoutes() {
     },
   );
 
-  // Debug: test PDF fill with a specific run row to diagnose signature embedding (v2 - native https)
+  // Debug: test PDF fill with a specific run row to diagnose signature embedding (v3 - curl fallback)
   router.get(
     "/debug/pdf-sig-test/:runId",
     authenticate(),
@@ -1258,18 +1257,12 @@ export function agentWorkspaceTemplateRoutes() {
         if (!sigRow) { res.json({ ok: false, error: "no row with payment.signature in this run" }); return; }
 
         const sigUrl = String(sigRow["payment.signature"]);
-        // Use native https (undici/fetch is blocked in this environment)
-        const { buf: bodyBuf, mime: contentType, status: fetchStatus } = await new Promise<{ buf: Buffer; mime: string; status: number }>((resolve, reject) => {
-          const req = https.get(sigUrl, (res) => {
-            const chunks: Buffer[] = [];
-            res.on("data", (c: Buffer | string) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
-            res.on("end", () => resolve({ buf: Buffer.concat(chunks), mime: res.headers["content-type"] || "image/png", status: res.statusCode ?? 0 }));
-            res.on("error", reject);
-          });
-          req.setTimeout(10000, () => { req.destroy(); reject(new Error("timeout")); });
-          req.on("error", reject);
-        });
-        const fetchOk = fetchStatus >= 200 && fetchStatus < 300;
+        const { fetchImageBuffer } = await import("../services/pdfGenerationService.js");
+        const fetchResult = await fetchImageBuffer(sigUrl);
+        const bodyBuf = fetchResult?.buf ?? null;
+        const contentType = fetchResult?.mime ?? null;
+        const fetchStatus = fetchResult ? 200 : 0;
+        const fetchOk = !!fetchResult;
 
         const tmplResult = await db.execute(sql`SELECT base_pdf_key, field_mappings FROM workspace_templates WHERE id = '26237577-729b-4000-9810-7cbe77d7b048' AND company_id = ${companyId} LIMIT 1`);
         const tmplRows = ((tmplResult as any).rows ?? tmplResult) as any[];
