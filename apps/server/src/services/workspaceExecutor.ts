@@ -215,10 +215,9 @@ export async function executeWorkflowPipeline(
               });
             } else {
               // Single call (no existing dataset)
-              // Strip signature from history params — it's only supported on individual booking lookups
+              // Note: signature=1 IS supported by the history endpoint natively — pass it through
               const historyParams = { ...(cfg.tool_params ?? {}) };
               const wantSignature = !!historyParams.signature;
-              delete historyParams.signature;
 
               // ── Paginated fetch with two strategies ──
               // The iCabbi history API has quirks:
@@ -251,6 +250,7 @@ export async function executeWorkflowPipeline(
                 // ══════════════════════════════════════════════
                 const scanParams: Record<string, unknown> = {};
                 if (historyParams.status) scanParams.status = historyParams.status;
+                if (historyParams.signature) scanParams.signature = historyParams.signature;
 
                 // Probe for global total_available
                 let totalAvailable = 500_000; // fallback
@@ -452,68 +452,15 @@ export async function executeWorkflowPipeline(
                 }
               }
 
-              // ── Signature enrichment (both strategies) ──
+              // ── Signature: history endpoint returns payment.signature natively when signature=1 is passed ──
+              // Ensure the key exists on all rows (null if no signature captured for that booking)
               if (wantSignature && dataset.length > 0) {
-                const SIG_CAP = 500;
-                const sigSlice = dataset.slice(0, SIG_CAP);
-                if (dataset.length > SIG_CAP) {
-                  console.log(`[WorkspaceExec] Signature enrichment capped at ${SIG_CAP}/${dataset.length} records`);
-                }
-                console.log(`[WorkspaceExec] Signature enrichment: fetching ${sigSlice.length} bookings...`);
-
-                const sigToolResult = await db.execute(sql`
-                  SELECT t.id FROM tools t
-                  JOIN connectors c ON c.id = t.connector_id
-                  JOIN agent_connectors ac ON ac.connector_id = c.id
-                  WHERE ac.agent_id = ${agentId} AND t.name = 'get_booking' AND t.company_id = ${companyId}
-                  LIMIT 1
-                `);
-                const sigToolRows = ((sigToolResult as any).rows ?? sigToolResult) as any[];
-
-                // Ensure payment.signature key exists on ALL rows
+                let sigFound = 0;
                 for (const row of dataset) {
                   if (!("payment.signature" in row)) row["payment.signature"] = null;
+                  else if (row["payment.signature"]) sigFound++;
                 }
-
-                if (sigToolRows.length > 0) {
-                  const sigToolId = sigToolRows[0].id;
-                  let enriched = 0;
-                  let enrichErrors = 0;
-                  const SIG_BATCH = 10;
-
-                  for (let bStart = 0; bStart < sigSlice.length; bStart += SIG_BATCH) {
-                    const batch = sigSlice.slice(bStart, bStart + SIG_BATCH);
-                    await Promise.all(batch.map(async (row) => {
-                      const tripId = row["trip_id"] || row["perma_id"] || row["id"];
-                      if (!tripId) return;
-                      try {
-                        const sigResult = await executeTool(sigToolId, companyId, {
-                          trip_id: String(tripId), signature: true,
-                        }, agentId, runId);
-                        if (sigResult.success) {
-                          const sigData = sigResult.response as any;
-                          const booking = sigData?.body?.booking || sigData?.booking || sigData;
-                          const sigUrl = booking?.payment?.signature;
-                          row["payment.signature"] = sigUrl ?? null;
-                          if (sigUrl) enriched++;
-                        }
-                      } catch { enrichErrors++; }
-                    }));
-
-                    const done = Math.min(bStart + SIG_BATCH, sigSlice.length);
-                    await db.execute(sql`
-                      UPDATE workspace_runs SET step_results = ${JSON.stringify([...stepResults, {
-                        stepId: step.id, label: step.label, status: "running",
-                        rowCount: dataset.length, duration_ms: Date.now() - stepStartMs,
-                        message: `Fetching signatures: ${done}/${sigSlice.length} (${enriched} found)...`,
-                      }])}
-                      WHERE id = ${runId}
-                    `);
-                  }
-                  console.log(`[WorkspaceExec] Signature enrichment: ${enriched} found, ${enrichErrors} errors`);
-                } else {
-                  console.log(`[WorkspaceExec] WARNING: get_booking tool not found, skipping signature enrichment`);
-                }
+                console.log(`[WorkspaceExec] Signatures in bulk response: ${sigFound}/${dataset.length}`);
               }
 
               stepResults.push({
