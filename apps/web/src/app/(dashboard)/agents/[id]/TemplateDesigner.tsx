@@ -115,7 +115,11 @@ function autoMapFields(
     bookingid: ["bookingid", "booking_id", "tripid", "trip_id"],
     accountname: ["accountname", "account_name", "account.name"],
     status: ["status"],
-    signature: ["signatureurl", "signature_url", "payment.signature", "paymentsignature"],
+    // Signature field aliases — normalize "Member's Signature" → memberssignature
+    signature: ["paymentsignature", "payment.signature", "signatureurl", "signature_url"],
+    memberssignature: ["paymentsignature", "payment.signature", "signatureurl", "signature_url"],
+    membersignature: ["paymentsignature", "payment.signature", "signatureurl", "signature_url"],
+    driversignature: ["paymentsignature", "payment.signature", "signatureurl", "signature_url"],
   };
 
   // Build normalized lookup for data columns
@@ -266,7 +270,9 @@ export default function TemplateDesigner({
 
         if (isFormFill && schema.form_fields) {
           const allFields = schema.form_fields as PdfFormField[];
-          const coverage = allFields.length > 0 ? Object.keys(initialMappings).length / allFields.length : 1;
+          // Exclude radio fields from coverage — they take static values, not column mappings
+          const mappableFields = allFields.filter((f: PdfFormField) => f.type !== "radio");
+          const coverage = mappableFields.length > 0 ? Object.keys(initialMappings).length / mappableFields.length : 1;
 
           if (coverage < 0.3) {
             initialMappings = autoMapFields(allFields, availableFields);

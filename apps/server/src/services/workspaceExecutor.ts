@@ -504,7 +504,8 @@ export async function executeWorkflowPipeline(
             try { if (isFormFill && dataset.length > 0) {
               const realMappings = Object.keys(fieldMappings).filter((k) => !k.startsWith("__sig_"));
               const formFields = (schema?.form_fields ?? []) as Array<{ name: string; type: string }>;
-              const fillableFields = formFields.filter((f) => f.type !== "signature");
+              // Exclude radio fields from coverage — they take static values not column mappings
+              const fillableFields = formFields.filter((f) => f.type !== "signature" && f.type !== "radio");
               const coverage = fillableFields.length > 0 ? realMappings.length / fillableFields.length : 1;
 
               if (coverage < 0.3) {
