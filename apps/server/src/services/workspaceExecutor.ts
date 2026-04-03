@@ -493,43 +493,123 @@ export async function executeWorkflowPipeline(
               break;
             }
 
-            const fieldMappings = (tmpl.field_mappings ?? {}) as Record<string, string>;
+            let fieldMappings = (tmpl.field_mappings ?? {}) as Record<string, string>;
             const pattern = cfg.filename_pattern || "{trip_id}-{name}.pdf";
 
             // Detect mode: form_fill (pdf-lib, preserves original) vs overlay (pdfme)
             const schema = tmpl.pdfme_schema as any;
             const isFormFill = schema?.mode === "form_fill";
 
-            let pdfResults: Array<{ filename: string; s3Key: string; rowIndex: number }>;
-            if (isFormFill) {
-              const { generateBatchFormFillPdfs } = await import("./pdfGenerationService.js");
-              pdfResults = await generateBatchFormFillPdfs(
-                tmpl.base_pdf_key,
-                fieldMappings,
-                dataset,
-                companyId,
-                runId,
-                pattern,
-              );
-            } else {
-              if (!tmpl.pdfme_schema) {
-                stepResults.push({
-                  stepId: step.id, label: step.label, status: "error",
-                  rowCount: 0, duration_ms: Date.now() - stepStartMs,
-                  message: "Template missing schema — open the template designer to complete setup",
-                });
-                break;
+            // Server-side auto-map: if field_mappings are mostly empty, auto-map from dataset columns
+            try { if (isFormFill && dataset.length > 0) {
+              const realMappings = Object.keys(fieldMappings).filter((k) => !k.startsWith("__sig_"));
+              const formFields = (schema?.form_fields ?? []) as Array<{ name: string; type: string }>;
+              const fillableFields = formFields.filter((f) => f.type !== "signature");
+              const coverage = fillableFields.length > 0 ? realMappings.length / fillableFields.length : 1;
+
+              if (coverage < 0.3) {
+                console.log("[WorkspaceExec] Low field mapping coverage, auto-mapping...", { coverage, realMappings: realMappings.length, fillableFields: fillableFields.length });
+                const dataColumns = Object.keys(dataset[0]);
+                const normalize = (s: string) => s.toLowerCase().replace(/'s\b/g, "").replace(/[_.\s\-\/()#]+/g, "").replace(/[']/g, "");
+                const aliases: Record<string, string[]> = {
+                  membername: ["name", "passenger_name", "passengername"],
+                  membersname: ["name", "passenger_name", "passengername"],
+                  drivername: ["driver_name", "driver.name", "drivername"],
+                  driversname: ["driver_name", "driver.name", "drivername"],
+                  tripdate: ["pickup_time", "pickup_date", "pickuptime", "pickupdate", "created_date"],
+                  pickupaddress: ["pickup_address", "address.formatted", "addressformatted"],
+                  pickupstreetaddresscitystatezip: ["pickup_address", "address.formatted", "addressformatted"],
+                  dropoffaddress: ["dropoff_address", "destination.formatted", "destinationformatted"],
+                  dropoffdestinationstreetaddresscitystatezip: ["dropoff_address", "destination.formatted", "destinationformatted"],
+                  memberhealthfirstcoloradoid: ["account_reference", "accountreference"],
+                  fareamount: ["fare_amount", "fareamount"],
+                  distance: ["distance", "distance_miles", "distancemiles"],
+                  bookingid: ["booking_id", "trip_id", "bookingid", "tripid"],
+                  accountname: ["account_name", "account.name", "accountname"],
+                  status: ["status"],
+                };
+                const usedCols = new Set<string>();
+                const sigKeys = Object.fromEntries(Object.entries(fieldMappings).filter(([k]) => k.startsWith("__sig_")));
+                const newMappings: Record<string, string> = { ...sigKeys };
+
+                for (const ff of formFields) {
+                  if (ff.type === "signature") continue;
+                  const normName = normalize(ff.name);
+
+                  // 1. Exact match
+                  let matchCol = dataColumns.find((c) => !usedCols.has(c) && normalize(c) === normName);
+                  // 2. Alias match
+                  if (!matchCol && aliases[normName]) {
+                    for (const alias of aliases[normName]) {
+                      matchCol = dataColumns.find((c) => !usedCols.has(c) && (c === alias || normalize(c) === normalize(alias)));
+                      if (matchCol) break;
+                    }
+                  }
+                  // 3. Substring match
+                  if (!matchCol) {
+                    matchCol = dataColumns.find((c) => !usedCols.has(c) && normalize(c).length > 2 && (normName.includes(normalize(c)) || normalize(c).includes(normName)));
+                  }
+                  if (matchCol) {
+                    newMappings[ff.name] = matchCol;
+                    usedCols.add(matchCol);
+                  }
+                }
+
+                const newRealMappings = Object.keys(newMappings).filter((k) => !k.startsWith("__sig_"));
+                console.log("[WorkspaceExec] Auto-mapped fields", { newMappings: newRealMappings.length, mappings: JSON.stringify(newMappings) });
+                fieldMappings = newMappings;
+
+                // Persist auto-mappings to DB
+                db.execute(sql`
+                  UPDATE workspace_templates SET field_mappings = ${JSON.stringify(fieldMappings)}, updated_at = NOW()
+                  WHERE id = ${cfg.template_id} AND company_id = ${companyId}
+                `).catch(() => {});
               }
-              const { generateBatchPdfs } = await import("./pdfGenerationService.js");
-              pdfResults = await generateBatchPdfs(
-                tmpl.base_pdf_key,
-                tmpl.pdfme_schema,
-                fieldMappings,
-                dataset,
-                companyId,
-                runId,
-                pattern,
-              );
+            } } catch (autoMapErr) {
+              console.error("[WorkspaceExec] Auto-map failed, proceeding with existing mappings", { err: autoMapErr });
+            }
+
+            let pdfResults: Array<{ filename: string; s3Key: string; rowIndex: number }>;
+            try {
+              console.log("[WorkspaceExec] Starting PDF generation", { isFormFill, mappingKeys: Object.keys(fieldMappings).filter(k => !k.startsWith("__sig_")), datasetLen: dataset.length });
+              if (isFormFill) {
+                const { generateBatchFormFillPdfs } = await import("./pdfGenerationService.js");
+                pdfResults = await generateBatchFormFillPdfs(
+                  tmpl.base_pdf_key,
+                  fieldMappings,
+                  dataset,
+                  companyId,
+                  runId,
+                  pattern,
+                );
+              } else {
+                if (!tmpl.pdfme_schema) {
+                  stepResults.push({
+                    stepId: step.id, label: step.label, status: "error",
+                    rowCount: 0, duration_ms: Date.now() - stepStartMs,
+                    message: "Template missing schema — open the template designer to complete setup",
+                  });
+                  break;
+                }
+                const { generateBatchPdfs } = await import("./pdfGenerationService.js");
+                pdfResults = await generateBatchPdfs(
+                  tmpl.base_pdf_key,
+                  tmpl.pdfme_schema,
+                  fieldMappings,
+                  dataset,
+                  companyId,
+                  runId,
+                  pattern,
+                );
+              }
+            } catch (pdfErr: any) {
+              console.error("[WorkspaceExec] PDF generation failed", { err: pdfErr, stack: pdfErr?.stack });
+              stepResults.push({
+                stepId: step.id, label: step.label, status: "error",
+                rowCount: 0, duration_ms: Date.now() - stepStartMs,
+                message: `PDF generation error: ${pdfErr?.message ?? String(pdfErr)}`,
+              });
+              break;
             }
 
             generatedFiles = pdfResults.map((r) => ({
@@ -605,6 +685,124 @@ export async function executeWorkflowPipeline(
               stepId: step.id, label: step.label, status: "success",
               rowCount: dataset.length, duration_ms: Date.now() - stepStartMs,
             });
+            break;
+          }
+
+          case "create_doc":
+          case "custom": {
+            // "custom" and "create_doc" are aliases that the AI pipeline generator
+            // may produce.  Dispatch based on the step label when possible.
+            const lbl = (step.label ?? "").toLowerCase();
+
+            if (
+              step.operation === "create_doc" ||
+              (lbl.includes("create") && lbl.includes("doc")) ||
+              (lbl.includes("generate") && (lbl.includes("pdf") || lbl.includes("doc")))
+            ) {
+              // Treat as generate_doc – reuse the same config shape
+              const cfg = step.config as {
+                template_id?: string;
+                output_format?: string;
+                per_row?: boolean;
+                filename_pattern?: string;
+              };
+
+              if (!cfg.template_id) {
+                stepResults.push({
+                  stepId: step.id, label: step.label, status: "error",
+                  rowCount: 0, duration_ms: Date.now() - stepStartMs,
+                  message: "No template selected",
+                });
+                break;
+              }
+
+              const tmplResult2 = await db.execute(sql`
+                SELECT * FROM workspace_templates
+                WHERE id = ${cfg.template_id} AND company_id = ${companyId}
+                LIMIT 1
+              `);
+              const tmplRows2 = ((tmplResult2 as any).rows ?? tmplResult2) as any[];
+              if (tmplRows2.length === 0) {
+                stepResults.push({
+                  stepId: step.id, label: step.label, status: "error",
+                  rowCount: 0, duration_ms: Date.now() - stepStartMs,
+                  message: "Template not found",
+                });
+                break;
+              }
+
+              const tmpl2 = tmplRows2[0];
+              if (!tmpl2.base_pdf_key) {
+                stepResults.push({
+                  stepId: step.id, label: step.label, status: "error",
+                  rowCount: 0, duration_ms: Date.now() - stepStartMs,
+                  message: "Template missing base PDF — open the template designer to upload a PDF",
+                });
+                break;
+              }
+
+              const fieldMappings2 = (tmpl2.field_mappings ?? {}) as Record<string, string>;
+              const pattern2 = cfg.filename_pattern || "{trip_id}-{name}.pdf";
+              const schema2 = tmpl2.pdfme_schema as any;
+              const isFormFill2 = schema2?.mode === "form_fill";
+
+              let pdfResults2: Array<{ filename: string; s3Key: string; rowIndex: number }>;
+              if (isFormFill2) {
+                const { generateBatchFormFillPdfs } = await import("./pdfGenerationService.js");
+                pdfResults2 = await generateBatchFormFillPdfs(
+                  tmpl2.base_pdf_key, fieldMappings2, dataset, companyId, runId, pattern2,
+                );
+              } else {
+                if (!tmpl2.pdfme_schema) {
+                  stepResults.push({
+                    stepId: step.id, label: step.label, status: "error",
+                    rowCount: 0, duration_ms: Date.now() - stepStartMs,
+                    message: "Template missing schema — open the template designer to complete setup",
+                  });
+                  break;
+                }
+                const { generateBatchPdfs } = await import("./pdfGenerationService.js");
+                pdfResults2 = await generateBatchPdfs(
+                  tmpl2.base_pdf_key, tmpl2.pdfme_schema, fieldMappings2, dataset, companyId, runId, pattern2,
+                );
+              }
+
+              generatedFiles = pdfResults2.map((r) => ({
+                filename: r.filename,
+                rowIndex: r.rowIndex,
+              }));
+
+              for (const r of pdfResults2) {
+                if (r.s3Key && dataset[r.rowIndex]) {
+                  dataset[r.rowIndex]["_pdf_file"] = r.filename;
+                  dataset[r.rowIndex]["_pdf_key"] = r.s3Key;
+                }
+              }
+
+              const successCount2 = pdfResults2.filter((r) => r.s3Key).length;
+              stepResults.push({
+                stepId: step.id, label: step.label,
+                status: successCount2 > 0 ? "success" : "error",
+                rowCount: successCount2, duration_ms: Date.now() - stepStartMs,
+                message: `Generated ${successCount2}/${dataset.length} PDFs`,
+              });
+            } else if (lbl.includes("save") || lbl.includes("export") || lbl.includes("upload")) {
+              // Save/export step — files are already persisted during generate_doc.
+              // Mark as success so the run result isn't confusing.
+              stepResults.push({
+                stepId: step.id, label: step.label, status: "success",
+                rowCount: dataset.length, duration_ms: Date.now() - stepStartMs,
+                message: generatedFiles.length > 0
+                  ? `${generatedFiles.length} files ready`
+                  : "No files to save (run a generate step first)",
+              });
+            } else {
+              stepResults.push({
+                stepId: step.id, label: step.label, status: "skipped",
+                rowCount: dataset.length, duration_ms: Date.now() - stepStartMs,
+                message: `Unrecognized custom step: ${step.label}`,
+              });
+            }
             break;
           }
 
