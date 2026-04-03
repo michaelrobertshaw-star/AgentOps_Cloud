@@ -572,13 +572,68 @@ export async function executeWorkflowPipeline(
 
             let pdfResults: Array<{ filename: string; s3Key: string; rowIndex: number }>;
             try {
+              // Pre-resolve image URLs to base64 data URIs for all signature field columns.
+              // This avoids HTTP fetches inside the tight per-row PDF generation loop (which can fail if
+              // the PDF generator runs in a restricted environment or if URLs expire mid-batch).
+              let resolvedDataset = dataset;
+              if (isFormFill) {
+                const sigColumns = new Set<string>();
+                for (const [k, v] of Object.entries(fieldMappings)) {
+                  if (!k.startsWith("__sig_") && v) {
+                    // Check if any row has an http URL for this column (likely a presigned image URL)
+                    const sample = dataset.find((r) => typeof r[v] === "string" && String(r[v]).startsWith("http"));
+                    if (sample) sigColumns.add(v);
+                  }
+                }
+                if (sigColumns.size > 0) {
+                  // Fetch unique URLs to base64
+                  const urlCache = new Map<string, string>();
+                  for (const col of sigColumns) {
+                    const urls = [...new Set(dataset.map((r) => r[col]).filter((u): u is string => typeof u === "string" && u.startsWith("http")))];
+                    console.log(`[WorkspaceExec] Pre-fetching ${urls.length} image URLs for column "${col}"`);
+                    await Promise.all(urls.map(async (url) => {
+                      try {
+                        const controller = new AbortController();
+                        const timer = setTimeout(() => controller.abort(), 12000);
+                        const res = await fetch(url, { signal: controller.signal });
+                        clearTimeout(timer);
+                        if (res.ok) {
+                          const buf = Buffer.from(await res.arrayBuffer());
+                          const mime = res.headers.get("content-type") || "image/png";
+                          urlCache.set(url, `data:${mime};base64,${buf.toString("base64")}`);
+                          console.log(`[WorkspaceExec] Pre-fetched image: ${mime}, ${buf.length} bytes`);
+                        } else {
+                          console.error(`[WorkspaceExec] Failed to pre-fetch image (HTTP ${res.status}): ${url.slice(0, 80)}`);
+                        }
+                      } catch (err) {
+                        console.error(`[WorkspaceExec] Error pre-fetching image: ${err}. URL: ${url.slice(0, 80)}`);
+                      }
+                    }));
+                  }
+                  // Replace URLs with base64 in the dataset
+                  if (urlCache.size > 0) {
+                    resolvedDataset = dataset.map((row) => {
+                      const newRow = { ...row };
+                      for (const col of sigColumns) {
+                        const url = newRow[col];
+                        if (typeof url === "string" && urlCache.has(url)) {
+                          newRow[col] = urlCache.get(url)!;
+                        }
+                      }
+                      return newRow;
+                    });
+                    console.log(`[WorkspaceExec] Pre-resolved ${urlCache.size} unique image URLs to base64`);
+                  }
+                }
+              }
+
               console.log("[WorkspaceExec] Starting PDF generation", { isFormFill, mappingKeys: Object.keys(fieldMappings).filter(k => !k.startsWith("__sig_")), datasetLen: dataset.length });
               if (isFormFill) {
                 const { generateBatchFormFillPdfs } = await import("./pdfGenerationService.js");
                 pdfResults = await generateBatchFormFillPdfs(
                   tmpl.base_pdf_key,
                   fieldMappings,
-                  dataset,
+                  resolvedDataset,
                   companyId,
                   runId,
                   pattern,
