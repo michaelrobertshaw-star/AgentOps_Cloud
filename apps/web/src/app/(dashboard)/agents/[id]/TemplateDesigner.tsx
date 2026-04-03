@@ -832,31 +832,39 @@ export default function TemplateDesigner({
 
                       {/* Type-specific controls */}
                       {ff.type === "signature" ? (
-                        /* Signature: just map to the column that contains the image URL or base64.
-                           Position is taken automatically from the PDF form field's own location. */
-                        <div className="space-y-1.5">
-                          <p className="text-[9px] text-pink-500">Select the column containing the signature image (URL or base64). It will be placed at the PDF's signature field location.</p>
-                          <select
-                            value={isMappedToColumn ? mapped : ""}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setFieldMappings((prev) => {
-                                const next = { ...prev };
-                                // Clear any legacy __sig_* metadata keys for this field
-                                for (const k of [`__sig_x__${ff.name}`, `__sig_y__${ff.name}`, `__sig_w__${ff.name}`, `__sig_h__${ff.name}`]) {
-                                  delete next[k];
-                                }
-                                if (!val) { delete next[ff.name]; return next; }
-                                return { ...next, [ff.name]: val };
-                              });
-                            }}
-                            className="w-full px-2 py-1 text-xs border border-gray-300 rounded-md bg-white focus:outline-none focus:ring-1 focus:ring-pink-400"
-                          >
-                            <option value="">— Select image column —</option>
-                            {availableFields.map((af) => (
-                              <option key={af.key} value={af.key}>{af.label}</option>
-                            ))}
-                          </select>
+                        /* Signature: tap a column pill to map it. Position comes from the PDF field's own location. */
+                        <div className="space-y-2">
+                          <p className="text-[9px] text-pink-500 font-medium">Tap a column to place the signature image at this field's location:</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {availableFields.map((af) => {
+                              const isSelected = mapped === af.key;
+                              // Highlight columns that look like image/signature data
+                              const looksLikeImage = /sig|sign|image|photo|img|url/i.test(af.key + af.label);
+                              return (
+                                <button
+                                  key={af.key}
+                                  onClick={() => setFieldMappings((prev) => {
+                                    const next = { ...prev };
+                                    for (const k of [`__sig_x__${ff.name}`, `__sig_y__${ff.name}`, `__sig_w__${ff.name}`, `__sig_h__${ff.name}`]) delete next[k];
+                                    if (isSelected) { delete next[ff.name]; return next; }
+                                    return { ...next, [ff.name]: af.key };
+                                  })}
+                                  className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium border transition-all ${
+                                    isSelected
+                                      ? "bg-pink-500 border-pink-500 text-white shadow-sm"
+                                      : looksLikeImage
+                                      ? "bg-pink-50 border-pink-300 text-pink-700 hover:bg-pink-100"
+                                      : "bg-white border-gray-300 text-gray-600 hover:bg-gray-50 hover:border-gray-400"
+                                  }`}
+                                >
+                                  {isSelected && <span className="mr-1">✓</span>}{af.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          {isMappedToColumn && (
+                            <p className="text-[9px] text-pink-600 font-medium">✓ Mapped to: <span className="font-mono">{mapped}</span> — tap again to remove</p>
+                          )}
                         </div>
                       ) : ff.type === "checkbox" ? (
                         <div className="space-y-1.5">
